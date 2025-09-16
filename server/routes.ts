@@ -11,8 +11,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication
   setupAuth(app);
 
-  // Import tools from CSV on startup
-  await importToolsFromCSV();
+  // Import tools from CSV on startup (non-blocking)
+  importToolsFromCSV().catch(error => {
+    console.error("Failed to import tools from CSV:", error);
+    console.log("Server will continue running without initial tool data");
+  });
 
   // Tools routes
   app.get("/api/tools", async (req, res) => {

@@ -1,7 +1,7 @@
 import { users, tools, userTools, savedIdeas, type User, type InsertUser, type Tool, type InsertTool, type UserTool, type InsertUserTool, type SavedIdea, type InsertSavedIdea } from "@shared/schema";
 import { db } from "./db";
 import { eq, and } from "drizzle-orm";
-import session from "express-session";
+import session, { type Store } from "express-session";
 import createMemoryStore from "memorystore";
 
 const MemoryStore = createMemoryStore(session);
@@ -31,11 +31,11 @@ export interface IStorage {
   createSavedIdea(idea: InsertSavedIdea): Promise<SavedIdea>;
   deleteSavedIdea(id: string): Promise<void>;
   
-  sessionStore: session.SessionStore;
+  sessionStore: Store;
 }
 
 export class DatabaseStorage implements IStorage {
-  sessionStore: session.SessionStore;
+  sessionStore: Store;
 
   constructor() {
     this.sessionStore = new MemoryStore({
