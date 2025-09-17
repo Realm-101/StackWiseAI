@@ -8,7 +8,7 @@ import { Search, Plus, Code, Database, Palette, Server, CreditCard, Wrench } fro
 import Navigation from "@/components/layout/navigation";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Tool } from "@shared/schema";
+import type { DiscoveryToolSummary, TrendingToolsResponse } from "@shared/schema";
 
 const getToolPopularityScore = (tool: any): number => {
   const raw = tool?.metrics?.popularity ?? tool?.popularityScore ?? tool?.popularity?.score ?? null;
@@ -72,9 +72,11 @@ export default function DiscoverTools() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
 
-  const { data: tools = [], isLoading } = useQuery<Tool[]>({
-    queryKey: ["/api/tools"],
+  const { data: trendingData, isLoading } = useQuery<TrendingToolsResponse>({
+    queryKey: ["/api/discovery/trending", { timeframe: 'week', limit: 60 }],
   });
+
+  const tools = trendingData?.items ?? [];
 
   const { data: userTools = [] } = useQuery({
     queryKey: ["/api/user-tools"],
@@ -111,7 +113,13 @@ export default function DiscoverTools() {
   });
 
   // Get user tool IDs for checking if tool is already added
-  const userToolIds = new Set(Array.isArray(userTools) ? userTools.map((ut: any) => ut.tool?.id || ut.toolId) : []);
+  const userToolNames = new Set(
+    Array.isArray(userTools)
+      ? userTools
+          .map((ut: any) => (ut.tool?.name || ut.toolName || '').toLowerCase())
+          .filter((name: string) => name.length > 0)
+      : []
+  );
 
   // Filter tools based on search and category
   const filteredTools = tools.filter((tool) => {
