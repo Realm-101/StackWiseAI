@@ -87,9 +87,23 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
     return num.toString();
   };
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString();
+  const formatDate = (value: string | Date | null | undefined) => {
+    if (!value) return "";
+    const date = typeof value === "string" ? new Date(value) : value;
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return date.toLocaleDateString();
   };
+
+  const starsCount = Number(tool.githubStars ?? 0);
+  const downloadsCount = Number(tool.npmWeeklyDownloads ?? tool.packageDownloads ?? tool.dockerPulls ?? 0);
+  const forksCount = Number(tool.githubForks ?? 0);
+  const lastUpdatedLabel = formatDate(tool.lastUpdated);
+  const difficultyLevel = tool.difficultyLevel ?? undefined;
+  const difficultyClass = difficultyLevel ? difficultyColors[difficultyLevel as keyof typeof difficultyColors] : undefined;
+  const pricingModel = tool.pricingModel ?? undefined;
+  const pricingClass = pricingModel ? (pricingColors[pricingModel as keyof typeof pricingColors] ?? "bg-gray-100 text-gray-800") : undefined;
 
   return (
     <Card className="hover:shadow-lg transition-all duration-200 h-full">
@@ -134,28 +148,28 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
         </p>
 
         <div className="grid grid-cols-2 gap-4 text-sm">
-          {tool.sourceMetadata?.stars && (
+          {starsCount > 0 && (
             <div className="flex items-center space-x-1">
               <Star className="h-4 w-4 text-yellow-500" />
-              <span>{formatNumber(Number(tool.sourceMetadata.stars))}</span>
+              <span>{formatNumber(starsCount)}</span>
             </div>
           )}
-          {tool.sourceMetadata?.downloads && (
+          {downloadsCount > 0 && (
             <div className="flex items-center space-x-1">
               <Download className="h-4 w-4 text-blue-500" />
-              <span>{formatNumber(Number(tool.sourceMetadata.downloads))}</span>
+              <span>{formatNumber(downloadsCount)}</span>
             </div>
           )}
-          {tool.sourceMetadata?.forks && (
+          {forksCount > 0 && (
             <div className="flex items-center space-x-1">
               <GitBranch className="h-4 w-4 text-green-500" />
-              <span>{formatNumber(Number(tool.sourceMetadata.forks))}</span>
+              <span>{formatNumber(forksCount)}</span>
             </div>
           )}
-          {tool.lastUpdated && (
+          {lastUpdatedLabel && (
             <div className="flex items-center space-x-1">
               <Calendar className="h-4 w-4 text-gray-500" />
-              <span>{formatDate(tool.lastUpdated)}</span>
+              <span>{lastUpdatedLabel}</span>
             </div>
           )}
         </div>
@@ -176,20 +190,20 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
         )}
 
         <div className="flex flex-wrap gap-2">
-          {tool.difficultyLevel && (
-            <Badge 
-              variant="secondary" 
-              className={`text-xs ${difficultyColors[tool.difficultyLevel as keyof typeof difficultyColors]}`}
+          {difficultyLevel && (
+            <Badge
+              variant="secondary"
+              className={`text-xs ${difficultyClass ?? 'bg-gray-100 text-gray-800'}`} 
             >
-              {tool.difficultyLevel}
+              {difficultyLevel}
             </Badge>
           )}
-          {tool.pricingModel && (
-            <Badge 
-              variant="secondary" 
-              className={`text-xs ${pricingColors[tool.pricingModel as keyof typeof pricingColors] || 'bg-gray-100 text-gray-800'}`}
+          {pricingModel && (
+            <Badge
+              variant="secondary"
+              className={`text-xs ${pricingClass ?? 'bg-gray-100 text-gray-800'}`} 
             >
-              {tool.pricingModel}
+              {pricingModel}
             </Badge>
           )}
         </div>
@@ -276,7 +290,7 @@ export default function DiscoveryHub() {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedSourceType, setSelectedSourceType] = useState<string | undefined>();
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>([]);
-  const [selectedPricingModel, setSelectedPricingModel] = useState<string | undefined>();
+  const [selectedPricingModel, setSelectedPricingModel] = useState<DiscoverySearchRequest["pricingModel"]>();
   const [activeTab, setActiveTab] = useState("trending");
 
   // Fetch trending tools
@@ -296,6 +310,7 @@ export default function DiscoveryHub() {
     sourceType: selectedSourceType,
     languages: selectedLanguages.length > 0 ? selectedLanguages : undefined,
     pricingModel: selectedPricingModel,
+    sortBy: "popularity",
     limit: 20,
     offset: 0,
   };
@@ -522,7 +537,7 @@ export default function DiscoveryHub() {
                     </Select>
 
                     {/* Pricing Model Filter */}
-                    <Select value={selectedPricingModel || ""} onValueChange={(value) => setSelectedPricingModel(value || undefined)}>
+                    <Select value={selectedPricingModel ?? ""} onValueChange={(value) => setSelectedPricingModel(value ? (value as DiscoverySearchRequest["pricingModel"]) : undefined)}>
                       <SelectTrigger data-testid="select-pricing">
                         <SelectValue placeholder="Pricing" />
                       </SelectTrigger>

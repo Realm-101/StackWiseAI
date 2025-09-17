@@ -23,11 +23,19 @@ const getSeverityColor = (severity: string) => {
   }
 };
 
-const getImportanceColor = (importance: 'critical' | 'important' | 'recommended') => {
+const getImportanceColor = (importance: 'critical' | 'important' | 'recommended' | 'essential' | 'beneficial' | 'optional') => {
   switch (importance) {
-    case 'critical': return 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-800';
-    case 'important': return 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800';
-    case 'recommended': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800';
+    case 'critical':
+    case 'essential':
+      return 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-800';
+    case 'important':
+    case 'beneficial':
+      return 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800';
+    case 'recommended':
+    case 'optional':
+      return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800';
+    default:
+      return 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-300 dark:border-gray-800';
   }
 };
 
@@ -42,6 +50,47 @@ const getPriorityColor = (priority: string) => {
     case 'medium': return 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800';
     case 'low': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800';
     default: return 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-950 dark:text-gray-300 dark:border-gray-800';
+  }
+};
+
+const getPriorityLabel = (priority: string) => {
+  switch (priority) {
+    case 'critical':
+      return 'Critical';
+    case 'optimization':
+      return 'Optimization opportunity';
+    case 'suggestion':
+      return 'Suggestion';
+    case 'note':
+      return 'Note';
+    case 'high':
+      return 'High value';
+    case 'medium':
+      return 'Good value';
+    case 'low':
+      return 'Consider';
+    case 'urgent':
+      return 'Urgent';
+    default:
+      return priority;
+  }
+};
+
+const getRedundancyImpactLabel = (severity: string) => {
+  switch (severity) {
+    case 'critical':
+    case 'high':
+      return 'High savings';
+    case 'optimization':
+    case 'medium':
+      return 'Medium savings';
+    case 'suggestion':
+    case 'low':
+      return 'Optimization opportunity';
+    case 'note':
+      return 'Insight';
+    default:
+      return severity;
   }
 };
 
@@ -152,7 +201,7 @@ export default function StackIntelligence() {
                         </CardHeader>
                         <CardContent>
                           <div className="text-2xl font-bold mb-2" data-testid="text-optimization-score">
-                            {analysis.optimizationScore || Math.max(0, 100 - (analysis.recommendations.filter(r => r.priority === 'critical' || r.priority === 'high').length * 15))}/100
+                            {analysis.optimizationScore || Math.max(0, 100 - (analysis.recommendations.filter(r => r.priority === 'critical').length * 15))}/100
                           </div>
                           <p className="text-sm text-muted-foreground">
                             Stack efficiency and value rating
@@ -211,14 +260,7 @@ export default function StackIntelligence() {
                         <div className="space-y-4">
                           {analysis.recommendations.slice(0, 5).map((rec, index) => (
                             <div key={index} className="flex items-start gap-3 p-4 border rounded-lg" data-testid={`recommendation-${index}`}>
-                              <Badge className={getPriorityColor(rec.priority)}>
-                                {rec.priority === 'high' ? 'High value' : 
-                                 rec.priority === 'medium' ? 'Good value' : 
-                                 rec.priority === 'low' ? 'Consider' :
-                                 rec.priority === 'critical' ? 'Critical' :
-                                 rec.priority === 'optimization' ? 'Optimize' :
-                                 rec.priority === 'suggestion' ? 'Suggestion' : rec.priority}
-                              </Badge>
+                              <Badge className={getPriorityColor(rec.priority)}>{getPriorityLabel(rec.priority)}</Badge>
                               <div className="flex-1">
                                 <h4 className="font-medium mb-1">{rec.description}</h4>
                                 <p className="text-sm text-muted-foreground mb-2">{rec.reasoning}</p>
@@ -246,10 +288,7 @@ export default function StackIntelligence() {
                           <CardTitle className="flex items-center justify-between">
                             <span>{redundancy.category} Optimization</span>
                             <Badge className={getSeverityColor(redundancy.severity)}>
-                              {redundancy.severity === 'high' ? 'High savings' : 
-                               redundancy.severity === 'medium' ? 'Medium savings' : 
-                               redundancy.severity === 'optimization' ? 'Optimization' :
-                               redundancy.severity === 'suggestion' ? 'Suggestion' : redundancy.severity}
+                              {getRedundancyImpactLabel(redundancy.severity)}
                             </Badge>
                           </CardTitle>
                         </CardHeader>

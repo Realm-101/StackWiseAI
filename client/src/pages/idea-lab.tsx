@@ -16,7 +16,7 @@ import RoadmapVisualization from "@/components/roadmap-visualization";
 import { TaskGenerationModal } from "@/components/tasks";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { SavedIdea, UserToolWithTool, UserAIContext, EnhancedBusinessIdea, ContextualRecommendation, GeneratedTasksResponse } from "@shared/schema";
+import type { SavedIdea, UserToolWithTool, UserAIContext, UserContextUpdate, EnhancedBusinessIdea, ContextualRecommendation, GeneratedTasksResponse } from "@shared/schema";
 
 interface GeneratedIdea {
   title: string;
@@ -226,6 +226,10 @@ export default function IdeaLab() {
       toolsUsed: selectedTools,
       monetization: idea.monetization,
       tags: idea.tags,
+      targetAudience: null,
+      implementationComplexity: null,
+      estimatedCost: null,
+      timeToMarket: null,
     });
   };
 
@@ -236,13 +240,35 @@ export default function IdeaLab() {
   };
 
   const handleContextSubmit = (formData: FormData) => {
-    const context = {
-      teamSize: formData.get("teamSize") as string || undefined,
-      industry: formData.get("industry") as string || undefined,
-      technicalLevel: formData.get("technicalLevel") as string || undefined,
-      companyStage: formData.get("companyStage") as string || undefined,
-      primaryGoals: formData.get("primaryGoals") ? (formData.get("primaryGoals") as string).split(",").map(g => g.trim()) : undefined,
+    const teamSizeRaw = formData.get("teamSize");
+    const technicalLevelRaw = formData.get("technicalLevel");
+    const companyStageRaw = formData.get("companyStage");
+
+    const teamSize = typeof teamSizeRaw === "string" && ["solo", "small", "medium", "large", "enterprise"].includes(teamSizeRaw)
+      ? (teamSizeRaw as UserAIContext["teamSize"])
+      : undefined;
+
+    const technicalLevel = typeof technicalLevelRaw === "string" && ["beginner", "intermediate", "expert"].includes(technicalLevelRaw)
+      ? (technicalLevelRaw as UserAIContext["technicalLevel"])
+      : undefined;
+
+    const companyStage = typeof companyStageRaw === "string" && ["idea", "startup", "growth", "mature"].includes(companyStageRaw)
+      ? (companyStageRaw as UserAIContext["companyStage"])
+      : undefined;
+
+    const primaryGoalsValue = formData.get("primaryGoals");
+    const primaryGoals = typeof primaryGoalsValue === "string"
+      ? primaryGoalsValue.split(",").map((goal) => goal.trim()).filter(Boolean)
+      : undefined;
+
+    const context: UserContextUpdate = {
+      teamSize,
+      industry: (formData.get("industry") as string | null) || undefined,
+      technicalLevel,
+      companyStage,
+      primaryGoals,
     };
+
     updateContextMutation.mutate(context);
   };
 
@@ -965,7 +991,7 @@ export default function IdeaLab() {
                               <div className="flex flex-wrap gap-2">
                                 {rec.suggestedTools.map((tool, toolIndex) => (
                                   <Badge key={toolIndex} variant="outline">
-                                    {tool}
+                                    {tool.name ?? tool.id}
                                   </Badge>
                                 ))}
                               </div>
