@@ -3,33 +3,91 @@ import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Layers, BarChart3, Bolt, Search, Lightbulb, Menu, LogOut, User } from "lucide-react";
+import { Layers, BarChart3, Bolt, Search, Lightbulb, Brain, Menu, LogOut, User, Github, Workflow, BookOpen, TrendingUp, ChevronDown } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
-const navItems = [
+const navGroups = [
   {
-    path: "/",
-    icon: BarChart3,
+    id: "dashboard",
     label: "Dashboard",
+    icon: BarChart3,
+    path: "/",
     testId: "nav-dashboard",
+    single: true,
   },
   {
-    path: "/stack",
+    id: "stack",
+    label: "Stack",
     icon: Bolt,
-    label: "My Stack",
-    testId: "nav-stack",
+    testId: "nav-stack-group",
+    items: [
+      {
+        path: "/stack",
+        icon: Bolt,
+        label: "My Stack",
+        testId: "nav-stack",
+      },
+      {
+        path: "/intelligence",
+        icon: Brain,
+        label: "Stack Intelligence",
+        testId: "nav-intelligence",
+      },
+    ],
   },
   {
-    path: "/discover",
+    id: "discover",
+    label: "Discover",
     icon: Search,
-    label: "Discover Bolt",
-    testId: "nav-discover",
+    testId: "nav-discover-group",
+    items: [
+      {
+        path: "/discover",
+        icon: Search,
+        label: "Discover Bolt",
+        testId: "nav-discover",
+      },
+      {
+        path: "/discovery-hub",
+        icon: TrendingUp,
+        label: "Discovery Hub",
+        testId: "nav-discovery-hub",
+      },
+    ],
   },
   {
-    path: "/ideas",
-    icon: Lightbulb,
-    label: "Idea Lab",
-    testId: "nav-ideas",
+    id: "build",
+    label: "Build",
+    icon: Workflow,
+    testId: "nav-build-group",
+    items: [
+      {
+        path: "/projects",
+        icon: Workflow,
+        label: "Projects",
+        testId: "nav-projects",
+      },
+      {
+        path: "/ideas",
+        icon: Lightbulb,
+        label: "Idea Lab",
+        testId: "nav-ideas",
+      },
+      {
+        path: "/import-repository",
+        icon: Github,
+        label: "Import Repository",
+        testId: "nav-import-repository",
+      },
+    ],
+  },
+  {
+    id: "docs",
+    label: "Documentation",
+    icon: BookOpen,
+    path: "/docs",
+    testId: "nav-documentation",
+    single: true,
   },
 ];
 
@@ -40,6 +98,14 @@ export default function Navigation() {
 
   const handleLogout = () => {
     logoutMutation.mutate();
+  };
+
+  // Helper function to check if any item in a group is active
+  const isGroupActive = (group: any) => {
+    if (group.single) {
+      return location === group.path || (group.path !== '/' && location.startsWith(group.path));
+    }
+    return group.items?.some((item: any) => location === item.path || location.startsWith(item.path));
   };
 
   return (
@@ -55,21 +121,54 @@ export default function Navigation() {
 
         {/* Desktop Navigation */}
         <div className="hidden md:flex items-center space-x-6">
-          {navItems.map((item) => {
-            const IconComponent = item.icon;
-            const isActive = location === item.path;
+          {navGroups.map((group) => {
+            const IconComponent = group.icon;
+            const isActive = isGroupActive(group);
             
+            // Single item groups render as buttons
+            if (group.single && group.path) {
+              return (
+                <Link key={group.id} href={group.path}>
+                  <Button
+                    variant={isActive ? "default" : "ghost"}
+                    className="flex items-center space-x-2"
+                    data-testid={group.testId}
+                  >
+                    <IconComponent className="h-4 w-4" />
+                    <span>{group.label}</span>
+                  </Button>
+                </Link>
+              );
+            }
+            
+            // Multi-item groups render as dropdown menus
             return (
-              <Link key={item.path} href={item.path}>
-                <Button
-                  variant={isActive ? "default" : "ghost"}
-                  className="flex items-center space-x-2"
-                  data-testid={item.testId}
-                >
-                  <IconComponent className="h-4 w-4" />
-                  <span>{item.label}</span>
-                </Button>
-              </Link>
+              <DropdownMenu key={group.id}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant={isActive ? "default" : "ghost"}
+                    className="flex items-center space-x-2"
+                    data-testid={group.testId}
+                  >
+                    <IconComponent className="h-4 w-4" />
+                    <span>{group.label}</span>
+                    <ChevronDown className="h-3 w-3 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-48">
+                  {group.items?.map((item) => {
+                    const ItemIcon = item.icon;
+                    return (
+                      <DropdownMenuItem key={item.path} asChild>
+                        <Link href={item.path} className="flex items-center space-x-2 w-full" data-testid={item.testId}>
+                          <ItemIcon className="h-4 w-4" />
+                          <span>{item.label}</span>
+                        </Link>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
             );
           })}
         </div>
@@ -84,23 +183,58 @@ export default function Navigation() {
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-64">
-              <div className="flex flex-col space-y-4 mt-8">
-                {navItems.map((item) => {
-                  const IconComponent = item.icon;
-                  const isActive = location === item.path;
+              <div className="flex flex-col space-y-6 mt-8">
+                {navGroups.map((group) => {
+                  const IconComponent = group.icon;
                   
+                  // Single item groups render as buttons
+                  if (group.single && group.path) {
+                    const isActive = location === group.path || (group.path !== '/' && location.startsWith(group.path));
+                    return (
+                      <Link key={group.id} href={group.path}>
+                        <Button
+                          variant={isActive ? "default" : "ghost"}
+                          className="w-full justify-start space-x-2"
+                          onClick={() => setIsMobileMenuOpen(false)}
+                          data-testid={`mobile-${group.testId}`}
+                        >
+                          <IconComponent className="h-4 w-4" />
+                          <span>{group.label}</span>
+                        </Button>
+                      </Link>
+                    );
+                  }
+                  
+                  // Multi-item groups render as grouped sections
                   return (
-                    <Link key={item.path} href={item.path}>
-                      <Button
-                        variant={isActive ? "default" : "ghost"}
-                        className="w-full justify-start space-x-2"
-                        onClick={() => setIsMobileMenuOpen(false)}
-                        data-testid={`mobile-${item.testId}`}
-                      >
-                        <IconComponent className="h-4 w-4" />
-                        <span>{item.label}</span>
-                      </Button>
-                    </Link>
+                    <div key={group.id} className="space-y-2">
+                      <div className="flex items-center space-x-2 px-2 py-1">
+                        <IconComponent className="h-4 w-4 text-muted-foreground" />
+                        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+                          {group.label}
+                        </h3>
+                      </div>
+                      <div className="space-y-1">
+                        {group.items?.map((item) => {
+                          const ItemIcon = item.icon;
+                          const isActive = location === item.path || location.startsWith(item.path);
+                          
+                          return (
+                            <Link key={item.path} href={item.path}>
+                              <Button
+                                variant={isActive ? "default" : "ghost"}
+                                className="w-full justify-start space-x-2 h-9"
+                                onClick={() => setIsMobileMenuOpen(false)}
+                                data-testid={`mobile-${item.testId}`}
+                              >
+                                <ItemIcon className="h-4 w-4" />
+                                <span>{item.label}</span>
+                              </Button>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </div>
                   );
                 })}
               </div>

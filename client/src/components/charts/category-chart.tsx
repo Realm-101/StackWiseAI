@@ -1,14 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Chart, ChartConfiguration } from "chart.js/auto";
-
-interface UserToolWithTool {
-  user_tools: {
-    monthlyCost: string;
-  };
-  tool: {
-    category: string;
-  };
-}
+import type { UserToolWithTool } from "@shared/schema";
 
 interface CategoryChartProps {
   userTools: UserToolWithTool[];
@@ -31,7 +23,7 @@ export function CategoryChart({ userTools }: CategoryChartProps) {
     
     userTools.forEach((item) => {
       const category = item.tool.category;
-      const cost = parseFloat(item.user_tools.monthlyCost || "0");
+      const cost = parseFloat(item.monthlyCost || "0");
       categoryData[category] = (categoryData[category] || 0) + cost;
     });
 
@@ -89,7 +81,7 @@ export function CategoryChart({ userTools }: CategoryChartProps) {
             callbacks: {
               label: function(context) {
                 const value = context.parsed;
-                const total = context.dataset.data.reduce((a: number, b: number | null) => a + (b || 0), 0);
+                const total = (context.dataset.data as number[]).reduce((a: number, b: number) => a + (b || 0), 0);
                 const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : '0';
                 return `${context.label}: $${value.toFixed(2)} (${percentage}%)`;
               },

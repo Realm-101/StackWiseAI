@@ -1,11 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Chart, ChartConfiguration } from "chart.js/auto";
-
-interface UserToolWithTool {
-  tool: {
-    popularityScore: string;
-  };
-}
+import type { UserToolWithTool } from "@shared/schema";
 
 interface PopularityChartProps {
   userTools: UserToolWithTool[];

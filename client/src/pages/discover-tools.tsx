@@ -79,6 +79,12 @@ export default function DiscoverTools() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/user-tools"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/budget/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cost-trends"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stack/analysis"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stack/redundancies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stack/missing"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stack/compatibility"] });
       toast({
         title: "Tool added",
         description: "Tool has been added to your stack.",
