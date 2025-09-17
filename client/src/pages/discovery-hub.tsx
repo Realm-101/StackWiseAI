@@ -31,7 +31,7 @@ import Navigation from "@/components/layout/navigation";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { 
-  DiscoveryToolDto, 
+  DiscoveryToolSummary, 
   DiscoverySearchRequest, 
   DiscoveryTrendingRequest,
   TrendingToolsResponse,
@@ -71,10 +71,11 @@ const pricingColors = {
   freemium: "bg-purple-100 text-purple-800",
   paid: "bg-orange-100 text-orange-800",
   enterprise: "bg-gray-100 text-gray-800",
+  unknown: "bg-gray-100 text-gray-800",
 };
 
 interface ToolDiscoveryCardProps {
-  tool: DiscoveryToolDto;
+  tool: DiscoveryToolSummary;
   onAddTool: (toolId: string) => void;
   onEvaluate: (toolId: string) => void;
   isAdding: boolean;
@@ -96,14 +97,20 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
     return date.toLocaleDateString();
   };
 
-  const starsCount = Number(tool.githubStars ?? 0);
-  const downloadsCount = Number(tool.npmWeeklyDownloads ?? tool.packageDownloads ?? tool.dockerPulls ?? 0);
-  const forksCount = Number(tool.githubForks ?? 0);
-  const lastUpdatedLabel = formatDate(tool.lastUpdated);
-  const difficultyLevel = tool.difficultyLevel ?? undefined;
+  const starsCount = Number(tool.metrics.githubStars ?? 0);
+  const downloadsCount = Number(tool.metrics.weeklyDownloads ?? tool.metrics.packageDownloads ?? tool.metrics.dockerPulls ?? 0);
+  const forksCount = Number(tool.metrics.githubForks ?? 0);
+  const lastUpdatedLabel = formatDate(tool.timestamps.lastUpdated);
+  const difficultyLevel = tool.badges.difficulty ?? undefined;
   const difficultyClass = difficultyLevel ? difficultyColors[difficultyLevel as keyof typeof difficultyColors] : undefined;
-  const pricingModel = tool.pricingModel ?? undefined;
+  const rawPricingModel = tool.badges.pricing ?? undefined;
+  const pricingModel = rawPricingModel && rawPricingModel !== 'unknown' ? rawPricingModel : undefined;
   const pricingClass = pricingModel ? (pricingColors[pricingModel as keyof typeof pricingColors] ?? "bg-gray-100 text-gray-800") : undefined;
+  const popularityScore = Number(tool.metrics.popularity ?? 0);
+  const languages = tool.tech.languages;
+  const tags = tool.tech.tags;
+  const primaryLink = tool.provenance.repoUrl || tool.provenance.sourceUrl || tool.provenance.homepageUrl;
+  const description = tool.tagline ?? tool.description ?? "";
 
   return (
     <Card className="hover:shadow-lg transition-all duration-200 h-full">
@@ -119,7 +126,7 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
               </CardTitle>
               <div className="flex items-center space-x-2 mt-1">
                 <Badge variant="outline" className="text-xs">
-                  {sourceTypeLabels[tool.sourceType as keyof typeof sourceTypeLabels] || tool.sourceType}
+                  {sourceTypeLabels[tool.provenance.sourceType as keyof typeof sourceTypeLabels] || tool.provenance.sourceType}
                 </Badge>
                 <Badge variant="secondary" className="text-xs">
                   {tool.category}
@@ -127,14 +134,14 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
               </div>
             </div>
           </div>
-          {tool.repositoryUrl && (
+          {primaryLink && (
             <Button
               variant="ghost"
               size="sm"
               asChild
               data-testid={`button-external-link-${tool.id}`}
             >
-              <a href={tool.repositoryUrl} target="_blank" rel="noopener noreferrer">
+              <a href={primaryLink} target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="h-4 w-4" />
               </a>
             </Button>
@@ -144,7 +151,7 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
 
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground line-clamp-3" data-testid={`text-description-${tool.id}`}>
-          {tool.description}
+          {description}
         </p>
 
         <div className="grid grid-cols-2 gap-4 text-sm">
@@ -174,16 +181,16 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
           )}
         </div>
 
-        {tool.popularityScore && (
+        {popularityScore > 0 && (
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Popularity Score</span>
-              <span className="font-medium">{Number(tool.popularityScore).toFixed(2)}</span>
+              <span className="font-medium">{popularityScore.toFixed(2)}</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div 
                 className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full"
-                style={{ width: `${Math.min(Number(tool.popularityScore) * 10, 100)}%` }}
+                style={{ width: `${Math.min(popularityScore, 100)}%` }}
               />
             </div>
           </div>
@@ -208,18 +215,28 @@ function ToolDiscoveryCard({ tool, onAddTool, onEvaluate, isAdding }: ToolDiscov
           )}
         </div>
 
-        {tool.languages && tool.languages.length > 0 && (
+        {languages.length > 0 && (
           <div className="flex flex-wrap gap-1">
-            {tool.languages.slice(0, 3).map((lang, index) => (
+            {languages.slice(0, 3).map((lang, index) => (
               <Badge key={index} variant="outline" className="text-xs">
                 {lang}
               </Badge>
             ))}
-            {tool.languages.length > 3 && (
+            {languages.length > 3 && (
               <Badge variant="outline" className="text-xs">
-                +{tool.languages.length - 3}
+                +{languages.length - 3}
               </Badge>
             )}
+          </div>
+        )}
+
+        {tags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {tags.slice(0, 4).map((tag, index) => (
+              <Badge key={index} variant="outline" className="text-xs">
+                {tag}
+              </Badge>
+            ))}
           </div>
         )}
 
@@ -381,7 +398,7 @@ export default function DiscoveryHub() {
     evaluateToolMutation.mutate(toolId);
   };
 
-  const currentTools = activeTab === "trending" ? trendingData?.tools || [] : searchData?.tools || [];
+  const currentTools = activeTab === "trending" ? trendingData?.items || [] : searchData?.items || [];
   const isLoading = activeTab === "trending" ? isTrendingLoading : isSearchLoading;
 
   return (
@@ -611,4 +628,6 @@ export default function DiscoveryHub() {
     </div>
   );
 }
+
+
 

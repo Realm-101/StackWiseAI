@@ -1,4 +1,4 @@
-import { type DiscoveredTool, type InsertDiscoveredTool } from "@shared/schema";
+import { type DiscoveredTool, type InsertDiscoveredTool, type DiscoverySourceStatus } from "@shared/schema";
 
 // Rate limiting configuration for each API
 export interface RateLimitConfig {
@@ -13,6 +13,21 @@ export interface APIClientConfig {
   apiKey?: string;
   headers?: Record<string, string>;
   timeout: number;
+}
+
+type SourceStatusValue = DiscoverySourceStatus['status'];
+
+interface SourceAdapterResult {
+  source: string;
+  tools: Omit<InsertDiscoveredTool, 'id'>[];
+  status: SourceStatusValue;
+  message?: string;
+  lastSyncAt: string | null;
+}
+
+interface AggregateDiscoveryResult {
+  tools: Omit<InsertDiscoveredTool, 'id'>[];
+  sourceStatuses: DiscoverySourceStatus[];
 }
 
 // Base API client with rate limiting and caching
@@ -768,81 +783,152 @@ export class DiscoveryAPIManager {
     this.dockerClient = new DockerHubClient();
   }
 
-  async discoverTrendingTools(categories?: string[]): Promise<Omit<InsertDiscoveredTool, 'id'>[]> {
-    const allTools: Omit<InsertDiscoveredTool, 'id'>[] = [];
-
+  private async runSourceAdapter(
+    source: string,
+    fetcher: () => Promise<Omit<InsertDiscoveredTool, 'id'>[]>
+  ): Promise<SourceAdapterResult> {
+    const startedAt = new Date();
     try {
-      // NPM trending packages
-      const npmPackages = await this.npmClient.getTrendingPackages();
-      for (const pkg of npmPackages) {
-        const downloads = await this.npmClient.getPackageDownloads(pkg.name).catch(() => null);
-        allTools.push(this.npmClient.transformToDiscoveredTool(pkg, downloads));
-      }
-
-      // PyPI trending packages
-      const pypiPackages = await this.pypiClient.getTrendingPackages();
-      for (const pkg of pypiPackages) {
-        allTools.push(this.pypiClient.transformToDiscoveredTool(pkg));
-      }
-
-      // GitHub trending repositories
-      const githubRepos = await this.githubClient.getTrendingRepositories();
-      for (const repo of githubRepos.items || []) {
-        allTools.push(this.githubClient.transformToDiscoveredTool(repo));
-      }
-
-      // Docker trending images
-      const dockerImages = await this.dockerClient.getTrendingImages();
-      for (const image of dockerImages) {
-        allTools.push(this.dockerClient.transformToDiscoveredTool(image));
-      }
-
+      const tools = await fetcher();
+      const completedAt = new Date().toISOString();
+      const status: SourceStatusValue = tools.length === 0 ? 'degraded' : 'ok';
+      return {
+        source,
+        tools,
+        status,
+        lastSyncAt: completedAt,
+      };
     } catch (error) {
-      console.error('Error discovering trending tools:', error);
+      console.error(`Failed to fetch ${source} discovery data:`, error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        source,
+        tools: [],
+        status: 'unavailable',
+        message,
+        lastSyncAt: null,
+      };
     }
-
-    // Filter by categories if specified
-    if (categories && categories.length > 0) {
-      return allTools.filter(tool => categories.includes(tool.category));
-    }
-
-    return allTools;
   }
 
-  async searchTools(query: string, sourceTypes?: string[]): Promise<Omit<InsertDiscoveredTool, 'id'>[]> {
-    const allTools: Omit<InsertDiscoveredTool, 'id'>[] = [];
+  async discoverTrendingTools(categories?: string[]): Promise<AggregateDiscoveryResult> {
+    const adapters: Array<Promise<SourceAdapterResult>> = [
+      this.runSourceAdapter('npm', async () => {
+        const results: Omit<InsertDiscoveredTool, 'id'>[] = [];
+        const npmPackages = await this.npmClient.getTrendingPackages();
+        for (const pkg of npmPackages) {
+          const downloads = await this.npmClient.getPackageDownloads(pkg.name).catch(() => null);
+          results.push(this.npmClient.transformToDiscoveredTool(pkg, downloads));
+        }
+        return results;
+      }),
+      this.runSourceAdapter('pypi', async () => {
+        const results: Omit<InsertDiscoveredTool, 'id'>[] = [];
+        const pypiPackages = await this.pypiClient.getTrendingPackages();
+        for (const pkg of pypiPackages) {
+          results.push(this.pypiClient.transformToDiscoveredTool(pkg));
+        }
+        return results;
+      }),
+      this.runSourceAdapter('github', async () => {
+        const results: Omit<InsertDiscoveredTool, 'id'>[] = [];
+        const githubRepos = await this.githubClient.getTrendingRepositories();
+        for (const repo of githubRepos.items || []) {
+          results.push(this.githubClient.transformToDiscoveredTool(repo));
+        }
+        return results;
+      }),
+      this.runSourceAdapter('docker', async () => {
+        const results: Omit<InsertDiscoveredTool, 'id'>[] = [];
+        const dockerImages = await this.dockerClient.getTrendingImages();
+        for (const image of dockerImages) {
+          results.push(this.dockerClient.transformToDiscoveredTool(image));
+        }
+        return results;
+      }),
+    ];
 
-    try {
-      // Search NPM if included
-      if (!sourceTypes || sourceTypes.includes('npm')) {
+    const results = await Promise.all(adapters);
+
+    let tools = results.flatMap(result => result.tools);
+
+    if (categories && categories.length > 0) {
+      const categorySet = new Set(categories.map(category => category.toLowerCase()));
+      tools = tools.filter(tool => categorySet.has(tool.category.toLowerCase()));
+    }
+
+    const sourceStatuses: DiscoverySourceStatus[] = results.map(result => ({
+      source: result.source,
+      status: result.status,
+      message:
+        result.status === 'degraded'
+          ? result.message ?? 'Source responded without usable data'
+          : result.message ?? null,
+      lastSyncAt: result.lastSyncAt,
+    }));
+
+    return { tools, sourceStatuses };
+  }
+
+  async searchTools(
+    query: string,
+    sourceTypes?: string[]
+  ): Promise<AggregateDiscoveryResult> {
+    const wantsSource = (source: string): boolean => !sourceTypes || sourceTypes.includes(source);
+
+    const adapters: Array<Promise<SourceAdapterResult>> = [];
+
+    if (wantsSource('npm')) {
+      adapters.push(this.runSourceAdapter('npm', async () => {
+        const results: Omit<InsertDiscoveredTool, 'id'>[] = [];
         const npmResults = await this.npmClient.searchPackages(query, 20);
         for (const result of npmResults.objects || []) {
           const downloads = await this.npmClient.getPackageDownloads(result.package.name).catch(() => null);
-          allTools.push(this.npmClient.transformToDiscoveredTool(result.package, downloads));
+          results.push(this.npmClient.transformToDiscoveredTool(result.package, downloads));
         }
-      }
-
-      // Search GitHub if included
-      if (!sourceTypes || sourceTypes.includes('github')) {
-        const githubResults = await this.githubClient.searchRepositories(query);
-        for (const repo of githubResults.items || []) {
-          allTools.push(this.githubClient.transformToDiscoveredTool(repo));
-        }
-      }
-
-      // Search Docker Hub if included
-      if (!sourceTypes || sourceTypes.includes('docker')) {
-        const dockerResults = await this.dockerClient.searchRepositories(query, 20);
-        for (const image of dockerResults.results || []) {
-          allTools.push(this.dockerClient.transformToDiscoveredTool(image));
-        }
-      }
-
-    } catch (error) {
-      console.error('Error searching tools:', error);
+        return results;
+      }));
     }
 
-    return allTools;
+    if (wantsSource('github')) {
+      adapters.push(this.runSourceAdapter('github', async () => {
+        const results: Omit<InsertDiscoveredTool, 'id'>[] = [];
+        const githubResults = await this.githubClient.searchRepositories(query);
+        for (const repo of githubResults.items || []) {
+          results.push(this.githubClient.transformToDiscoveredTool(repo));
+        }
+        return results;
+      }));
+    }
+
+    if (wantsSource('docker')) {
+      adapters.push(this.runSourceAdapter('docker', async () => {
+        const results: Omit<InsertDiscoveredTool, 'id'>[] = [];
+        const dockerResults = await this.dockerClient.searchRepositories(query, 20);
+        for (const image of dockerResults.results || []) {
+          results.push(this.dockerClient.transformToDiscoveredTool(image));
+        }
+        return results;
+      }));
+    }
+
+    if (adapters.length === 0) {
+      return { tools: [], sourceStatuses: [] };
+    }
+
+    const results = await Promise.all(adapters);
+    const tools = results.flatMap(result => result.tools);
+    const sourceStatuses: DiscoverySourceStatus[] = results.map(result => ({
+      source: result.source,
+      status: result.status,
+      message:
+        result.status === 'degraded'
+          ? result.message ?? 'Source responded without usable data'
+          : result.message ?? null,
+      lastSyncAt: result.lastSyncAt,
+    }));
+
+    return { tools, sourceStatuses };
   }
 
   clearAllCaches(): void {

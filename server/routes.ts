@@ -5,7 +5,7 @@ import { setupAuth } from "./auth";
 import { generateBusinessIdeas, generateEnhancedBusinessIdeas, generateTechRoadmap, getContextualRecommendations, generateProjectTasks, optimizeTaskSequencing, generateTaskRefinements } from "./gemini";
 import { GitHubRepositoryAnalyzer } from "./github-analyzer";
 import { seedDocumentationContent } from "./doc-seeder";
-import { DiscoveryEngine, mapToDiscoveryToolDto } from "./discovery/discovery-engine";
+import { DiscoveryEngine, mapToDiscoveryToolSummary } from "./discovery/discovery-engine";
 import { projectPlanner } from "./project-planning/project-planner";
 import { timelineEngine } from "./project-planning/timeline-engine";
 import { resourceOptimizer } from "./project-planning/resource-optimizer";
@@ -51,6 +51,9 @@ import {
   // Discovery schemas
   discoverySearchSchema,
   discoveryTrendingSchema,
+  discoveryTrendingResponseSchema,
+  discoverySearchResponseSchema,
+  discoveryRecommendationsResponseSchema,
   startDiscoverySessionSchema,
   toolEvaluationSchema,
   updateDiscoveryPreferencesSchema,
@@ -67,9 +70,6 @@ import {
   type StartDiscoverySessionRequest,
   type ToolEvaluationRequest,
   type UpdateDiscoveryPreferencesRequest,
-  type TrendingToolsResponse,
-  type DiscoverySearchResponse,
-  type ToolRecommendationsResponse,
   type DiscoverySessionStatus
 } from "@shared/schema";
 import fs from "fs";
@@ -2346,25 +2346,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/discovery/trending", async (req, res) => {
     try {
       const filters = discoveryTrendingSchema.parse(req.query);
-      
-      const trendingTools = await discoveryEngine.discoverTrendingTools(
+
+      const { tools: trendingTools, sourceStatuses } = await discoveryEngine.discoverTrendingTools(
         { maxToolsPerSource: filters.limit },
         filters.category ? [filters.category] : undefined
       );
 
-      const response: TrendingToolsResponse = {
-        tools: trendingTools.map(mapToDiscoveryToolDto),
-        totalCount: trendingTools.length,
+      const items = trendingTools.map(mapToDiscoveryToolSummary);
+      const categoryCounts = new Map<string, number>();
+      for (const tool of items) {
+        categoryCounts.set(tool.category, (categoryCounts.get(tool.category) ?? 0) + 1);
+      }
+      const categories = Array.from(categoryCounts.entries()).map(([category, count]) => ({ category, count }));
+
+      const payload = discoveryTrendingResponseSchema.parse({
+        items,
+        totalCount: items.length,
         timeframe: filters.timeframe,
         lastUpdated: new Date().toISOString(),
-        categories: Array.from(new Set(trendingTools.map(t => t.category)))
-          .map(cat => ({ 
-            category: cat, 
-            count: trendingTools.filter(t => t.category === cat).length 
-          })),
-      };
+        categories,
+        sourceStatuses,
+      });
 
-      res.json(response);
+      res.json(payload);
     } catch (error) {
       console.error("Error fetching trending tools:", error);
       if (isZodError(error)) {
@@ -2377,12 +2381,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/discovery/search", async (req, res) => {
     try {
       const filters = discoverySearchSchema.parse(req.query);
-      
+
       if (!filters.query && !filters.category) {
         return res.status(400).json({ message: "Query or category required" });
       }
 
-      const searchResults = filters.query 
+      const discoveryResult = filters.query
         ? await discoveryEngine.searchTools(
             filters.query,
             filters.sourceType ? [filters.sourceType] : undefined
@@ -2392,13 +2396,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             filters.category ? [filters.category] : undefined
           );
 
-      // Apply additional filters
-      let filteredResults = searchResults;
-      
+      let filteredResults = discoveryResult.tools;
+
       if (filters.languages?.length) {
         filteredResults = filteredResults.filter(tool =>
-          tool.languages?.some(lang => 
-            filters.languages!.some(filterLang => 
+          tool.languages?.some(lang =>
+            filters.languages!.some(filterLang =>
               lang.toLowerCase().includes(filterLang.toLowerCase())
             )
           )
@@ -2406,57 +2409,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (filters.pricingModel) {
-        filteredResults = filteredResults.filter(tool => 
+        filteredResults = filteredResults.filter(tool =>
           tool.pricingModel === filters.pricingModel
         );
       }
 
       if (filters.difficultyLevel) {
-        filteredResults = filteredResults.filter(tool => 
+        filteredResults = filteredResults.filter(tool =>
           tool.difficultyLevel === filters.difficultyLevel
         );
       }
 
-      // Pagination
-      const startIndex = filters.offset;
-      const endIndex = startIndex + filters.limit;
-      const dtoFilteredResults = filteredResults.map(mapToDiscoveryToolDto);
-      const paginatedResults = dtoFilteredResults.slice(startIndex, endIndex);
-
-      const response: DiscoverySearchResponse = {
-        tools: paginatedResults,
-        totalCount: dtoFilteredResults.length,
-        facets: {
-          categories: Array.from(new Set(dtoFilteredResults.map(t => t.category)))
-            .map(cat => ({ 
-              category: cat, 
-              count: dtoFilteredResults.filter(t => t.category === cat).length 
-            })),
-          sourceTypes: Array.from(new Set(dtoFilteredResults.map(t => t.sourceType)))
-            .map(type => ({ 
-              type, 
-              count: dtoFilteredResults.filter(t => t.sourceType === type).length 
-            })),
-          languages: Array.from(new Set(dtoFilteredResults.flatMap(t => t.languages)))
-            .map(lang => ({ 
-              language: lang, 
-              count: dtoFilteredResults.filter(t => t.languages.includes(lang)).length 
-            })),
-          pricingModels: Array.from(new Set(dtoFilteredResults.map(t => t.pricingModel)))
-            .map(model => ({ 
-              model, 
-              count: dtoFilteredResults.filter(t => t.pricingModel === model).length 
-            })),
-          tags: Array.from(new Set(dtoFilteredResults.flatMap(t => t.tags)))
-            .slice(0, 20) // Limit tags for performance
-            .map(tag => ({ 
-              tag, 
-              count: dtoFilteredResults.filter(t => t.tags.includes(tag)).length 
-            })),
-        },
-        searchTime: Date.now(), // Simplified - would calculate actual search time
-      };
-      res.json(response);
+      const startIndex = filters.offset;
+      const endIndex = startIndex + filters.limit;
+
+      const dtoFilteredResults = filteredResults.map(mapToDiscoveryToolSummary);
+      const paginatedResults = dtoFilteredResults.slice(startIndex, endIndex);
+
+      const categoriesFacet = new Map<string, number>();
+      const sourceFacet = new Map<string, number>();
+      const languageFacet = new Map<string, number>();
+      const pricingFacet = new Map<string, number>();
+      const tagFacet = new Map<string, number>();
+
+      for (const tool of dtoFilteredResults) {
+        categoriesFacet.set(tool.category, (categoriesFacet.get(tool.category) ?? 0) + 1);
+        sourceFacet.set(tool.provenance.sourceType, (sourceFacet.get(tool.provenance.sourceType) ?? 0) + 1);
+        pricingFacet.set(tool.badges.pricing, (pricingFacet.get(tool.badges.pricing) ?? 0) + 1);
+        for (const language of tool.tech.languages) {
+          languageFacet.set(language, (languageFacet.get(language) ?? 0) + 1);
+        }
+        for (const tag of tool.tech.tags.slice(0, 20)) {
+          tagFacet.set(tag, (tagFacet.get(tag) ?? 0) + 1);
+        }
+      }
+
+      const payload = discoverySearchResponseSchema.parse({
+        items: paginatedResults,
+        totalCount: dtoFilteredResults.length,
+        facets: {
+          categories: Array.from(categoriesFacet.entries()).map(([category, count]) => ({ category, count })),
+          sourceTypes: Array.from(sourceFacet.entries()).map(([type, count]) => ({ type, count })),
+          languages: Array.from(languageFacet.entries()).map(([language, count]) => ({ language, count })),
+          pricingModels: Array.from(pricingFacet.entries()).map(([model, count]) => ({ model, count })),
+          tags: Array.from(tagFacet.entries()).map(([tag, count]) => ({ tag, count })),
+        },
+        sourceStatuses: discoveryResult.sourceStatuses,
+        searchTime: Date.now(),
+      });
+
+      res.json(payload);
     } catch (error) {
       console.error("Error searching discovery tools:", error);
       if (isZodError(error)) {
@@ -2490,7 +2492,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user.industry || undefined
       );
 
-      res.json(recommendations);
+      const payload = discoveryRecommendationsResponseSchema.parse(recommendations);
+
+      res.json(payload);
     } catch (error) {
       console.error("Error generating recommendations:", error);
       res.status(500).json({ message: "Failed to generate recommendations" });
@@ -2514,7 +2518,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`Starting discovery session ${sessionId} with config:`, scanRequest);
           
           // Run discovery for specified source types
-          const discoveredTools = await discoveryEngine.discoverTrendingTools(
+          const discoveryResult = await discoveryEngine.discoverTrendingTools(
             {
               enabledSources: scanRequest.sourceTypes,
               maxToolsPerSource: scanRequest.scanConfig?.maxToolsPerSource || 100,
@@ -2523,7 +2527,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             scanRequest.categories
           );
 
-          console.log(`Discovery session ${sessionId} completed. Found ${discoveredTools.length} tools.`);
+          console.log(`Discovery session ${sessionId} completed. Found ${discoveryResult.tools.length} tools.`);
         } catch (error) {
           console.error(`Discovery session ${sessionId} failed:`, error);
         }
@@ -2805,9 +2809,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user?.teamSize || undefined,
         user?.industry || undefined
       );
+      const recommendationItems = discoveryRecommendations.items;
 
       // Integrate trending tools relevant to user's stack
-      const relevantTrending = await discoveryEngine.discoverTrendingTools(
+      const { tools: relevantTrending } = await discoveryEngine.discoverTrendingTools(
         { maxToolsPerSource: 5 },
         userCategories.length > 0 ? userCategories : undefined
       );
@@ -2826,7 +2831,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const enhancedAnalysis = {
         traditional: stackAnalysis,
         discovery: {
-          personalizedRecommendations: discoveryRecommendations.slice(0, 8),
+          personalizedRecommendations: recommendationItems.slice(0, 8),
           trendingInYourDomain: relevantTrending.slice(0, 6),
           alternatives: alternatives.filter(alt => alt.alternatives.length > 0),
           stackInsights: {
@@ -3018,13 +3023,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userStack = userTools.map(ut => ut.tool.name);
       const userCategories = user?.preferredCategories || [];
       
-      const allRecommendations = await discoveryEngine.generateRecommendations(
+      const recommendationResult = await discoveryEngine.generateRecommendations(
         userStack,
         userCategories,
         user?.preferredCategories || [],
         user?.teamSize || undefined,
         user?.industry || undefined
       );
+      const allRecommendations = recommendationResult.items;
 
       // Categorize tools by estimated cost
       const budgetPlan = {
@@ -4024,6 +4030,7 @@ async function importToolsFromCSV() {
     console.error("Error importing tools from CSV:", error);
   }
 }
+
 
 
 

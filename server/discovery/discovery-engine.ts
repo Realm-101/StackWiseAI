@@ -13,10 +13,10 @@ import {
   type InsertExternalToolData,
   type ToolPopularityMetric,
   type DiscoveredToolEvaluation,
-  type DiscoveryToolDto,
-  type TrendingToolsResponse,
+  type DiscoveryToolSummary,
   type ToolRecommendationsResponse,
-  type DiscoverySessionStatus
+  type DiscoverySessionStatus,
+  type DiscoverySourceStatus
 } from '@shared/schema';
 
 // Discovery configuration
@@ -54,7 +54,13 @@ export type DiscoveryToolSource = Omit<InsertDiscoveredTool, 'id'> & {
   evaluation?: DiscoveredToolEvaluation | null;
 };
 
-export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolDto {
+interface DiscoveryResult<T> {
+  tools: T[];
+  sourceStatuses: DiscoverySourceStatus[];
+}
+
+
+export function mapToDiscoveryToolSummary(tool: DiscoveryToolSource): DiscoveryToolSummary {
   const toNumber = (value: unknown, fallback = 0): number => {
     if (value === null || value === undefined) return fallback;
     const numeric = typeof value === 'number' ? value : Number(value);
@@ -76,58 +82,164 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
   };
 
   const toStringOrNull = (value: unknown): string | null => {
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
     }
     return null;
   };
 
-  const languages = Array.isArray(tool.languages) ? tool.languages.filter(Boolean) as string[] : [];
-  const frameworks = Array.isArray(tool.frameworks) ? tool.frameworks.filter(Boolean) as string[] : [];
-  const tags = Array.isArray(tool.tags) ? tool.tags.filter(Boolean) as string[] : [];
-  const keywords = Array.isArray(tool.keywords) ? tool.keywords.filter(Boolean) as string[] : [];
+  const slugify = (value: string): string =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/-{2,}/g, '-');
 
-  const rawSourceId = toStringOrNull(tool.sourceId) ?? tool.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const sourceId = rawSourceId && rawSourceId !== '-' ? rawSourceId : randomUUID();
-  const syntheticId = ${tool.sourceType}:;
+  const arrayFrom = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+
+  const normalizePricing = (
+    value: string | null
+  ): 'free' | 'freemium' | 'paid' | 'enterprise' | 'unknown' => {
+    if (!value) return 'unknown';
+    const normalized = value.toLowerCase();
+    if (['free', 'freemium', 'paid', 'enterprise'].includes(normalized)) {
+      return normalized as 'free' | 'freemium' | 'paid' | 'enterprise';
+    }
+    if (normalized.includes('free')) return 'free';
+    if (normalized.includes('trial') || normalized.includes('freemium')) return 'freemium';
+    if (normalized.includes('enterprise')) return 'enterprise';
+    return 'paid';
+  };
+
+  const normalizeDifficulty = (
+    value: string | null
+  ): 'beginner' | 'intermediate' | 'expert' | null => {
+    if (!value) return null;
+    const normalized = value.toLowerCase();
+    if (['beginner', 'intermediate', 'expert'].includes(normalized)) {
+      return normalized as 'beginner' | 'intermediate' | 'expert';
+    }
+    if (normalized.includes('easy')) return 'beginner';
+    if (normalized.includes('advanced') || normalized.includes('complex')) return 'expert';
+    return 'intermediate';
+  };
+
+  const languages = arrayFrom(tool.languages);
+  const frameworks = arrayFrom(tool.frameworks);
+  const tags = arrayFrom(tool.tags);
+  const keywords = arrayFrom(tool.keywords);
 
   const extended = tool as Record<string, unknown>;
+  const rawSourceId = toStringOrNull(tool.sourceId);
+  const fallbackId = slugify(tool.name) || randomUUID();
+  const sourceId = rawSourceId ? slugify(rawSourceId) || fallbackId : fallbackId;
+  const id = `${tool.sourceType}:${sourceId}`;
+  const slugBase = slugify(tool.name) || sourceId;
+  const slug = `${slugBase}-${tool.sourceType}`.toLowerCase();
+
+  const description = toStringOrNull(tool.description);
+
+  const deriveTagline = (): string | null => {
+    const existing = toStringOrNull(extended.tagline);
+    if (existing) return existing;
+    if (!description) return null;
+    const sentence = description.split(/[.!?]/)[0]?.trim() ?? '';
+    if (sentence.length > 0) {
+      return sentence.length > 140 ? `${sentence.slice(0, 137)}...` : sentence;
+    }
+    return description.length > 140 ? `${description.slice(0, 137)}...` : description;
+  };
+  const tagline = deriveTagline();
+
+  const popularityScore = toNumber(extended.popularityScore);
+  const trendingScore = toNumber(extended.trendingScore);
+  const qualityScore = toNumber(extended.qualityScore);
+
+  const discoveredAtIso = toIsoString(extended.discoveredAt);
+  const lastUpdatedIso = toIsoString(extended.lastUpdated ?? tool.lastUpdated);
+  const lastScannedIso = toIsoString(extended.lastScanned);
+
+  const now = Date.now();
+  const isRecent = (iso: string | null): boolean => {
+    if (!iso) return false;
+    const timestamp = Date.parse(iso);
+    return Number.isFinite(timestamp) && now - timestamp <= 1000 * 60 * 60 * 24 * 30;
+  };
+
+  const isNew = isRecent(discoveredAtIso) || isRecent(lastUpdatedIso);
+  const isTrendingUp = trendingScore >= 60 || trendingScore > popularityScore;
+
+  const estimatedMonthlyCost = toNullableNumber(extended.estimatedMonthlyCost);
+  const weeklyDownloads = toNullableNumber(
+    tool.npmWeeklyDownloads ?? tool.packageDownloads ?? extended.weeklyDownloads
+  );
+  const packageDownloads = toNullableNumber(tool.packageDownloads ?? extended.packageDownloads);
+  const dockerPulls = toNullableNumber(tool.dockerPulls);
+  const githubStars = toNullableNumber(tool.githubStars);
+  const githubForks = toNullableNumber(tool.githubForks);
+
+  const evaluation = tool.evaluation
+    ? {
+        status: toStringOrNull(tool.evaluation.status),
+        rating: toNullableNumber(tool.evaluation.rating),
+        notes: toStringOrNull(tool.evaluation.notes),
+        decisionReason: toStringOrNull(tool.evaluation.decisionReason),
+      }
+    : null;
 
   return {
-    id: syntheticId,
+    id,
+    slug,
     name: tool.name,
-    description: toStringOrNull(tool.description),
+    tagline,
+    description,
     category: tool.category,
     subCategory: toStringOrNull(extended.subCategory),
-    sourceType: tool.sourceType,
-    sourceId,
-    sourceUrl: toStringOrNull(tool.sourceUrl),
-    repositoryUrl: toStringOrNull(tool.repositoryUrl),
-    documentationUrl: toStringOrNull(tool.documentationUrl),
-    homepageUrl: toStringOrNull(tool.homepageUrl),
-    languages,
-    frameworks,
-    tags,
-    keywords,
-    pricingModel: toStringOrNull(tool.pricingModel) ?? 'free',
-    costCategory: toStringOrNull(tool.costCategory) ?? 'free',
-    estimatedMonthlyCost: toNullableNumber(extended.estimatedMonthlyCost),
-    difficultyLevel: toStringOrNull(extended.difficultyLevel),
-    popularityScore: toNumber(extended.popularityScore),
-    trendingScore: toNumber(extended.trendingScore),
-    qualityScore: toNumber(extended.qualityScore),
-    githubStars: toNullableNumber(tool.githubStars),
-    githubForks: toNullableNumber(tool.githubForks),
-    npmWeeklyDownloads: toNullableNumber(tool.npmWeeklyDownloads),
-    dockerPulls: toNullableNumber(tool.dockerPulls),
-    packageDownloads: toNullableNumber(tool.packageDownloads),
-    discoveredAt: toIsoString(extended.discoveredAt),
-    lastUpdated: toIsoString(extended.lastUpdated ?? tool.lastUpdated),
-    lastScanned: toIsoString(extended.lastScanned),
-    metrics: tool.metrics ?? null,
-    evaluation: tool.evaluation ?? null,
+    badges: {
+      pricing: normalizePricing(toStringOrNull(tool.pricingModel) ?? toStringOrNull(tool.costCategory)),
+      difficulty: normalizeDifficulty(toStringOrNull(extended.difficultyLevel)),
+      isNew,
+      isTrendingUp,
+    },
+    provenance: {
+      sourceType: tool.sourceType,
+      sourceId,
+      sourceUrl: toStringOrNull(tool.sourceUrl),
+      repoUrl: toStringOrNull(tool.repositoryUrl),
+      docsUrl: toStringOrNull(tool.documentationUrl),
+      homepageUrl: toStringOrNull(tool.homepageUrl),
+    },
+    tech: {
+      languages,
+      frameworks,
+      tags,
+      keywords,
+    },
+    metrics: {
+      popularity: popularityScore,
+      trending: trendingScore,
+      quality: qualityScore,
+      githubStars,
+      githubForks,
+      weeklyDownloads,
+      dockerPulls,
+      packageDownloads,
+      estimatedMonthlyCost,
+    },
+    timestamps: {
+      discoveredAt: discoveredAtIso,
+      lastUpdated: lastUpdatedIso,
+      lastScanned: lastScannedIso,
+    },
+    evaluation,
   };
-}\nexport class DiscoveryEngine {
+}
+
+export class DiscoveryEngine {
   private apiManager: DiscoveryAPIManager;
   private defaultConfig: DiscoveryConfig;
   private scoringWeights: ScoringWeights;
@@ -190,27 +302,31 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
   async discoverTrendingTools(
     config: Partial<DiscoveryConfig> = {},
     categories?: string[]
-  ): Promise<Omit<InsertDiscoveredTool, 'id'>[]> {
+  ): Promise<DiscoveryResult<Omit<InsertDiscoveredTool, 'id'>>> {
     const finalConfig = { ...this.defaultConfig, ...config };
-    
+
     console.log('Starting trending tool discovery...', { categories, config: finalConfig });
 
-    const discoveredTools = await this.apiManager.discoverTrendingTools(categories);
-    
-    // Apply intelligent filtering and scoring
-    const enrichedTools = await this.enrichAndScoreTools(discoveredTools);
-    
-    // Apply minimum threshold filtering
-    const filteredTools = enrichedTools.filter(tool => 
+    const { tools: rawTools, sourceStatuses } = await this.apiManager.discoverTrendingTools(categories);
+
+    const enrichedTools = await this.enrichAndScoreTools(rawTools);
+    const categoryFilteredTools = categories && categories.length > 0
+      ? enrichedTools.filter(tool => categories.includes(tool.category))
+      : enrichedTools;
+
+    const filteredTools = categoryFilteredTools.filter(tool =>
       this.toNumber(tool.popularityScore) >= finalConfig.minPopularityThreshold
     );
 
-    // Sort by combined score and limit results
     const sortedTools = this.sortToolsByScore(filteredTools)
       .slice(0, finalConfig.maxToolsPerSource);
 
     console.log(`Discovered ${sortedTools.length} trending tools`);
-    return sortedTools;
+
+    return {
+      tools: sortedTools,
+      sourceStatuses,
+    };
   }
 
   /**
@@ -220,20 +336,17 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
     query: string,
     sourceTypes?: string[],
     config: Partial<DiscoveryConfig> = {}
-  ): Promise<Omit<InsertDiscoveredTool, 'id'>[]> {
+  ): Promise<DiscoveryResult<Omit<InsertDiscoveredTool, 'id'>>> {
     const finalConfig = { ...this.defaultConfig, ...config };
-    
+
     console.log('Searching tools...', { query, sourceTypes, config: finalConfig });
 
-    const discoveredTools = await this.apiManager.searchTools(query, sourceTypes);
-    
-    // Apply intelligent filtering and scoring
+    const { tools: discoveredTools, sourceStatuses } = await this.apiManager.searchTools(query, sourceTypes);
+
     const enrichedTools = await this.enrichAndScoreTools(discoveredTools);
-    
-    // Calculate relevance scores for search
+
     const searchScoredTools = this.calculateSearchRelevance(enrichedTools, query);
-    
-    // Sort by relevance and combined score
+
     const sortedTools = searchScoredTools
       .sort((a, b) => {
         const aRelevance = this.calculateRelevanceScore(a, query);
@@ -244,7 +357,11 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
       .slice(0, finalConfig.maxToolsPerSource);
 
     console.log(`Found ${sortedTools.length} tools for query: ${query}`);
-    return sortedTools;
+
+    return {
+      tools: sortedTools,
+      sourceStatuses,
+    };
   }
 
   /**
@@ -266,7 +383,7 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
     });
 
     // Discover tools in user's preferred categories
-    const categoryTools = await this.discoverTrendingTools({}, userCategories);
+    const { tools: categoryTools } = await this.discoverTrendingTools({}, userCategories);
     
     // Find complementary tools based on current stack
     const complementaryTools = await this.findComplementaryTools(userStack, userLanguages);
@@ -294,7 +411,7 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
     const topTools = contextScoredTools.slice(0, 15);
 
     return {
-      recommendations: topTools.map(tool => mapToDiscoveryToolDto(tool)),
+      items: topTools.map(tool => mapToDiscoveryToolSummary(tool)),
       reasoning,
       basedOnStack: userStack,
       confidenceScore: this.calculateConfidenceScore(contextScoredTools, userStack),
@@ -600,7 +717,7 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
 
     for (const category of complementaryCategories) {
       try {
-        const categoryTools = await this.discoverTrendingTools({ maxToolsPerSource: 20 }, [category]);
+        const { tools: categoryTools } = await this.discoverTrendingTools({ maxToolsPerSource: 20 }, [category]);
         
         // Filter by user languages if specified
         const languageFilteredTools = userLanguages.length > 0 
@@ -935,6 +1052,11 @@ export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolD
     ];
   }
 }
+
+
+
+
+
 
 
 

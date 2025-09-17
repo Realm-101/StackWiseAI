@@ -2054,75 +2054,105 @@ export const updateDiscoveryPreferencesSchema = z.object({
   recommendationFrequency: z.enum(["daily", "weekly", "monthly"]).optional(),
 });
 
-// Discovery response interfaces
-export interface DiscoveryToolDto {
-  id: string;
-  name: string;
-  description?: string | null;
-  category: string;
-  subCategory?: string | null;
-  sourceType: string;
-  sourceId: string;
-  sourceUrl?: string | null;
-  repositoryUrl?: string | null;
-  documentationUrl?: string | null;
-  homepageUrl?: string | null;
-  languages: string[];
-  frameworks: string[];
-  tags: string[];
-  keywords: string[];
-  pricingModel: string;
-  costCategory: string;
-  estimatedMonthlyCost: number | null;
-  difficultyLevel?: string | null;
-  popularityScore: number;
-  trendingScore: number;
-  qualityScore: number;
-  githubStars?: number | null;
-  githubForks?: number | null;
-  npmWeeklyDownloads?: number | null;
-  dockerPulls?: number | null;
-  packageDownloads?: number | null;
-  discoveredAt?: string | null;
-  lastUpdated?: string | null;
-  lastScanned?: string | null;
-  metrics?: ToolPopularityMetric | null;
-  evaluation?: DiscoveredToolEvaluation | null;
-}
-export interface DiscoveredToolWithMetrics extends DiscoveredTool {
-  metrics?: ToolPopularityMetric;
-  evaluation?: DiscoveredToolEvaluation;
-}
+// Discovery response schemas
+const difficultyLevelSchema = z.enum(['beginner', 'intermediate', 'expert']);
+const pricingModelSchema = z.enum(['free', 'freemium', 'paid', 'enterprise', 'unknown']);
 
-export interface TrendingToolsResponse {
-  tools: DiscoveryToolDto[];
-  totalCount: number;
-  timeframe: string;
-  lastUpdated: string;
-  categories: Array<{ category: string; count: number }>;
-}
+export const discoveryToolSummarySchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  tagline: z.string().nullable(),
+  description: z.string().nullable(),
+  category: z.string(),
+  subCategory: z.string().nullable(),
+  badges: z.object({
+    pricing: pricingModelSchema,
+    difficulty: difficultyLevelSchema.nullable(),
+    isNew: z.boolean(),
+    isTrendingUp: z.boolean(),
+  }),
+  provenance: z.object({
+    sourceType: z.string(),
+    sourceId: z.string(),
+    sourceUrl: z.string().nullable(),
+    repoUrl: z.string().nullable(),
+    docsUrl: z.string().nullable(),
+    homepageUrl: z.string().nullable(),
+  }),
+  tech: z.object({
+    languages: z.array(z.string()),
+    frameworks: z.array(z.string()),
+    tags: z.array(z.string()),
+    keywords: z.array(z.string()),
+  }),
+  metrics: z.object({
+    popularity: z.number(),
+    trending: z.number(),
+    quality: z.number(),
+    githubStars: z.number().nullable(),
+    githubForks: z.number().nullable(),
+    weeklyDownloads: z.number().nullable(),
+    dockerPulls: z.number().nullable(),
+    packageDownloads: z.number().nullable(),
+    estimatedMonthlyCost: z.number().nullable(),
+  }),
+  timestamps: z.object({
+    discoveredAt: z.string().nullable(),
+    lastUpdated: z.string().nullable(),
+    lastScanned: z.string().nullable(),
+  }),
+  evaluation: z.object({
+    status: z.string().nullable(),
+    rating: z.number().int().min(0).max(5).nullable(),
+    notes: z.string().nullable(),
+    decisionReason: z.string().nullable(),
+  }).nullable(),
+});
+export type DiscoveryToolSummary = z.infer<typeof discoveryToolSummarySchema>;
 
-export interface DiscoverySearchResponse {
-  tools: DiscoveryToolDto[];
-  totalCount: number;
-  facets: {
-    categories: Array<{ category: string; count: number }>;
-    sourceTypes: Array<{ type: string; count: number }>;
-    languages: Array<{ language: string; count: number }>;
-    pricingModels: Array<{ model: string; count: number }>;
-    tags: Array<{ tag: string; count: number }>;
-  };
-  searchTime: number;
-}
+export const discoverySourceStatusSchema = z.object({
+  source: z.string(),
+  status: z.enum(['ok', 'unavailable', 'degraded']),
+  message: z.string().nullable(),
+  lastSyncAt: z.string().nullable(),
+});
+export type DiscoverySourceStatus = z.infer<typeof discoverySourceStatusSchema>;
 
-export interface ToolRecommendationsResponse {
-  recommendations: DiscoveryToolDto[];
-  reasoning: string[];
-  basedOnStack: string[];
-  confidenceScore: number;
-  categories: string[];
-}
+export const discoveryTrendingResponseSchema = z.object({
+  items: z.array(discoveryToolSummarySchema),
+  totalCount: z.number().nonnegative(),
+  timeframe: z.string(),
+  lastUpdated: z.string(),
+  categories: z.array(z.object({ category: z.string(), count: z.number().nonnegative() })),
+  sourceStatuses: z.array(discoverySourceStatusSchema).default([]),
+});
+export type DiscoveryTrendingResponse = z.infer<typeof discoveryTrendingResponseSchema>;
+export type TrendingToolsResponse = DiscoveryTrendingResponse;
 
+export const discoverySearchResponseSchema = z.object({
+  items: z.array(discoveryToolSummarySchema),
+  totalCount: z.number().nonnegative(),
+  facets: z.object({
+    categories: z.array(z.object({ category: z.string(), count: z.number().nonnegative() })),
+    sourceTypes: z.array(z.object({ type: z.string(), count: z.number().nonnegative() })),
+    languages: z.array(z.object({ language: z.string(), count: z.number().nonnegative() })),
+    pricingModels: z.array(z.object({ model: z.string(), count: z.number().nonnegative() })),
+    tags: z.array(z.object({ tag: z.string(), count: z.number().nonnegative() })),
+  }),
+  sourceStatuses: z.array(discoverySourceStatusSchema).default([]),
+  searchTime: z.number().nonnegative(),
+});
+export type DiscoverySearchResponse = z.infer<typeof discoverySearchResponseSchema>;
+
+export const discoveryRecommendationsResponseSchema = z.object({
+  items: z.array(discoveryToolSummarySchema),
+  reasoning: z.array(z.string()),
+  basedOnStack: z.array(z.string()),
+  confidenceScore: z.number().min(0).max(100),
+  categories: z.array(z.string()),
+});
+export type ToolRecommendationsResponse = z.infer<typeof discoveryRecommendationsResponseSchema>;
 export interface DiscoverySessionStatus {
   id: string;
   status: string;
