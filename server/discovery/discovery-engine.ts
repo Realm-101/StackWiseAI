@@ -1,16 +1,19 @@
-import { 
-  DiscoveryAPIManager, 
-  NPMClient, 
-  PyPIClient, 
-  GitHubClient, 
-  DockerHubClient 
+import {
+  DiscoveryAPIManager,
+  NPMClient,
+  PyPIClient,
+  GitHubClient,
+  DockerHubClient
 } from './api-clients';
-import { 
-  type InsertDiscoveredTool, 
+import { randomUUID } from 'node:crypto';
+import {
+  type InsertDiscoveredTool,
   type InsertToolDiscoverySession,
   type InsertToolPopularityMetric,
   type InsertExternalToolData,
-  type DiscoveredToolWithMetrics,
+  type ToolPopularityMetric,
+  type DiscoveredToolEvaluation,
+  type DiscoveryToolDto,
   type TrendingToolsResponse,
   type ToolRecommendationsResponse,
   type DiscoverySessionStatus
@@ -46,7 +49,85 @@ export interface CategoryRule {
   priority: number;
 }
 
-export class DiscoveryEngine {
+export type DiscoveryToolSource = Omit<InsertDiscoveredTool, 'id'> & {
+  metrics?: ToolPopularityMetric | null;
+  evaluation?: DiscoveredToolEvaluation | null;
+};
+
+export function mapToDiscoveryToolDto(tool: DiscoveryToolSource): DiscoveryToolDto {
+  const toNumber = (value: unknown, fallback = 0): number => {
+    if (value === null || value === undefined) return fallback;
+    const numeric = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  };
+
+  const toNullableNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+    const numeric = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  const toIsoString = (value: unknown): string | null => {
+    if (!value) return null;
+    const date = value instanceof Date ? value : new Date(value as string | number);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+
+  const toStringOrNull = (value: unknown): string | null => {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+    return null;
+  };
+
+  const languages = Array.isArray(tool.languages) ? tool.languages.filter(Boolean) as string[] : [];
+  const frameworks = Array.isArray(tool.frameworks) ? tool.frameworks.filter(Boolean) as string[] : [];
+  const tags = Array.isArray(tool.tags) ? tool.tags.filter(Boolean) as string[] : [];
+  const keywords = Array.isArray(tool.keywords) ? tool.keywords.filter(Boolean) as string[] : [];
+
+  const rawSourceId = toStringOrNull(tool.sourceId) ?? tool.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const sourceId = rawSourceId && rawSourceId !== '-' ? rawSourceId : randomUUID();
+  const syntheticId = ${tool.sourceType}:;
+
+  const extended = tool as Record<string, unknown>;
+
+  return {
+    id: syntheticId,
+    name: tool.name,
+    description: toStringOrNull(tool.description),
+    category: tool.category,
+    subCategory: toStringOrNull(extended.subCategory),
+    sourceType: tool.sourceType,
+    sourceId,
+    sourceUrl: toStringOrNull(tool.sourceUrl),
+    repositoryUrl: toStringOrNull(tool.repositoryUrl),
+    documentationUrl: toStringOrNull(tool.documentationUrl),
+    homepageUrl: toStringOrNull(tool.homepageUrl),
+    languages,
+    frameworks,
+    tags,
+    keywords,
+    pricingModel: toStringOrNull(tool.pricingModel) ?? 'free',
+    costCategory: toStringOrNull(tool.costCategory) ?? 'free',
+    estimatedMonthlyCost: toNullableNumber(extended.estimatedMonthlyCost),
+    difficultyLevel: toStringOrNull(extended.difficultyLevel),
+    popularityScore: toNumber(extended.popularityScore),
+    trendingScore: toNumber(extended.trendingScore),
+    qualityScore: toNumber(extended.qualityScore),
+    githubStars: toNullableNumber(tool.githubStars),
+    githubForks: toNullableNumber(tool.githubForks),
+    npmWeeklyDownloads: toNullableNumber(tool.npmWeeklyDownloads),
+    dockerPulls: toNullableNumber(tool.dockerPulls),
+    packageDownloads: toNullableNumber(tool.packageDownloads),
+    discoveredAt: toIsoString(extended.discoveredAt),
+    lastUpdated: toIsoString(extended.lastUpdated ?? tool.lastUpdated),
+    lastScanned: toIsoString(extended.lastScanned),
+    metrics: tool.metrics ?? null,
+    evaluation: tool.evaluation ?? null,
+  };
+}\nexport class DiscoveryEngine {
   private apiManager: DiscoveryAPIManager;
   private defaultConfig: DiscoveryConfig;
   private scoringWeights: ScoringWeights;
@@ -75,6 +156,34 @@ export class DiscoveryEngine {
     this.categoryRules = this.initializeCategoryRules();
   }
 
+  private toNumber(value: string | number | null | undefined, fallback = 0): number {
+    if (value === null || value === undefined) {
+      return fallback;
+    }
+    const numeric = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  private toDate(value: unknown, fallback: Date = new Date()): Date {
+    if (value instanceof Date) {
+      return value;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+    return fallback;
+  }
+
+  private toStringValue(value: string | number | null | undefined, fallback = '0'): string {
+    if (value === null || value === undefined) {
+      return fallback;
+    }
+    return typeof value === 'number' ? value.toString() : value;
+  }
+
   /**
    * Discover trending tools across all platforms
    */
@@ -93,7 +202,7 @@ export class DiscoveryEngine {
     
     // Apply minimum threshold filtering
     const filteredTools = enrichedTools.filter(tool => 
-      parseFloat(tool.popularityScore) >= finalConfig.minPopularityThreshold
+      this.toNumber(tool.popularityScore) >= finalConfig.minPopularityThreshold
     );
 
     // Sort by combined score and limit results
@@ -130,7 +239,7 @@ export class DiscoveryEngine {
         const aRelevance = this.calculateRelevanceScore(a, query);
         const bRelevance = this.calculateRelevanceScore(b, query);
         if (aRelevance !== bRelevance) return bRelevance - aRelevance;
-        return parseFloat(b.popularityScore) - parseFloat(a.popularityScore);
+        return this.toNumber(b.popularityScore) - this.toNumber(a.popularityScore);
       })
       .slice(0, finalConfig.maxToolsPerSource);
 
@@ -182,12 +291,14 @@ export class DiscoveryEngine {
       userCategories
     );
 
+    const topTools = contextScoredTools.slice(0, 15);
+
     return {
-      recommendations: contextScoredTools.slice(0, 15).map(tool => ({ ...tool })),
+      recommendations: topTools.map(tool => mapToDiscoveryToolDto(tool)),
       reasoning,
       basedOnStack: userStack,
       confidenceScore: this.calculateConfidenceScore(contextScoredTools, userStack),
-      categories: [...new Set(contextScoredTools.map(t => t.category))],
+      categories: [...new Set(topTools.map(t => t.category))],
     };
   }
 
@@ -220,7 +331,7 @@ export class DiscoveryEngine {
         qualityScore,
         difficultyLevel,
         ...costEstimation,
-        lastUpdated: new Date().toISOString(),
+        lastUpdated: tool.lastUpdated instanceof Date ? tool.lastUpdated : new Date(),
       };
     }));
   }
@@ -551,6 +662,7 @@ export class DiscoveryEngine {
     return 'library';
   }
 
+
   /**
    * Score tools based on user context
    */
@@ -563,7 +675,7 @@ export class DiscoveryEngine {
     industry?: string
   ): Omit<InsertDiscoveredTool, 'id'>[] {
     return tools.map(tool => {
-      let contextScore = parseFloat(tool.popularityScore);
+      let contextScore = this.toNumber(tool.popularityScore);
       
       // Category preference boost
       if (userCategories.includes(tool.category)) {
@@ -597,7 +709,7 @@ export class DiscoveryEngine {
         ...tool,
         popularityScore: Math.min(100, contextScore).toFixed(1),
       };
-    }).sort((a, b) => parseFloat(b.popularityScore) - parseFloat(a.popularityScore));
+    }).sort((a, b) => this.toNumber(b.popularityScore) - this.toNumber(a.popularityScore));
   }
 
   /**
@@ -646,8 +758,8 @@ export class DiscoveryEngine {
    */
   private sortToolsByScore(tools: Omit<InsertDiscoveredTool, 'id'>[]): Omit<InsertDiscoveredTool, 'id'>[] {
     return tools.sort((a, b) => {
-      const aScore = parseFloat(a.popularityScore) + (parseFloat(a.qualityScore) * 0.3);
-      const bScore = parseFloat(b.popularityScore) + (parseFloat(b.qualityScore) * 0.3);
+      const aScore = this.toNumber(a.popularityScore) + (this.toNumber(a.qualityScore) * 0.3);
+      const bScore = this.toNumber(b.popularityScore) + (this.toNumber(b.qualityScore) * 0.3);
       return bScore - aScore;
     });
   }
@@ -722,7 +834,7 @@ export class DiscoveryEngine {
     let confidence = 50; // Base confidence
 
     // Higher confidence if we have many high-quality tools
-    const highQualityTools = tools.filter(t => parseFloat(t.popularityScore) > 70).length;
+    const highQualityTools = tools.filter(t => this.toNumber(t.popularityScore) > 70).length;
     confidence += Math.min(30, highQualityTools * 3);
 
     // Higher confidence if tools are well-distributed across categories
@@ -823,3 +935,14 @@ export class DiscoveryEngine {
     ];
   }
 }
+
+
+
+
+
+
+
+
+
+
+

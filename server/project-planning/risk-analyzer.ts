@@ -394,7 +394,7 @@ export class RiskAnalyzer {
         mitigation: this.createDefaultMitigation('technical'),
         triggers: ['Complex integration requirements', 'New technology adoption', 'Performance bottlenecks'],
         indicators: [],
-        detectededAt: now,
+        detectedAt: now,
         lastAssessed: now
       });
     }
@@ -415,7 +415,7 @@ export class RiskAnalyzer {
         mitigation: this.createDefaultMitigation('resource'),
         triggers: ['High workload periods', 'Unexpected absences', 'Skill bottlenecks'],
         indicators: [],
-        detectededAt: now,
+        detectedAt: now,
         lastAssessed: now
       });
     }
@@ -437,7 +437,7 @@ export class RiskAnalyzer {
         mitigation: this.createDefaultMitigation('budget'),
         triggers: ['Scope creep', 'Resource cost increases', 'Unexpected expenses'],
         indicators: [],
-        detectededAt: now,
+        detectedAt: now,
         lastAssessed: now
       });
     }
@@ -458,18 +458,19 @@ export class RiskAnalyzer {
         mitigation: this.createDefaultMitigation('schedule'),
         triggers: ['Task dependencies', 'Resource bottlenecks', 'Quality issues'],
         indicators: [],
-        detectededAt: now,
+        detectedAt: now,
         lastAssessed: now
       });
     }
 
     // Scope risks
-    if (!project.acceptanceCriteria || project.acceptanceCriteria.length === 0) {
+    const tasksMissingAcceptance = tasks.filter(task => !task.acceptanceCriteria || task.acceptanceCriteria.length === 0);
+    if (tasks.length > 0 && tasksMissingAcceptance.length === tasks.length) {
       risks.push({
         id: `scope_unclear_${Date.now()}`,
         category: 'scope',
         title: 'Unclear Acceptance Criteria',
-        description: 'Lack of clear acceptance criteria increases scope creep risk',
+        description: 'Most tasks lack acceptance criteria, increasing scope creep risk',
         probability: 0.6,
         impact: 6,
         riskScore: 0,
@@ -478,7 +479,7 @@ export class RiskAnalyzer {
         mitigation: this.createDefaultMitigation('scope'),
         triggers: ['Stakeholder feedback', 'Requirements changes', 'Market shifts'],
         indicators: [],
-        detectededAt: now,
+        detectedAt: now,
         lastAssessed: now
       });
     }
@@ -678,64 +679,72 @@ export class RiskAnalyzer {
   }
 
   private createDefaultMitigation(category: RiskCategory): MitigationStrategy {
-    const strategies = {
+    const strategies: Partial<Record<RiskCategory, MitigationStrategy>> = {
       technical: {
-        type: 'mitigate' as const,
+        type: 'mitigate',
         description: 'Implement technical risk mitigation through prototyping and expert consultation',
         actions: [],
         cost: 3000,
         timeToImplement: 10,
         effectiveness: 0.7,
         responsible: 'Technical Lead',
-        status: 'planned' as const
+        deadline: new Date(),
+        status: 'planned'
       },
       resource: {
-        type: 'mitigate' as const,
+        type: 'mitigate',
         description: 'Rebalance workload and provide backup resource options',
         actions: [],
         cost: 2000,
         timeToImplement: 5,
         effectiveness: 0.8,
         responsible: 'Resource Manager',
-        status: 'planned' as const
+        deadline: new Date(),
+        status: 'planned'
       },
       budget: {
-        type: 'mitigate' as const,
+        type: 'mitigate',
         description: 'Implement budget controls and regular monitoring',
         actions: [],
         cost: 1000,
         timeToImplement: 3,
         effectiveness: 0.75,
         responsible: 'Project Manager',
-        status: 'planned' as const
+        deadline: new Date(),
+        status: 'planned'
       },
       schedule: {
-        type: 'mitigate' as const,
+        type: 'mitigate',
         description: 'Optimize timeline and implement fast-tracking strategies',
         actions: [],
         cost: 1500,
         timeToImplement: 7,
         effectiveness: 0.65,
         responsible: 'Project Manager',
-        status: 'planned' as const
+        deadline: new Date(),
+        status: 'planned'
       },
       scope: {
-        type: 'avoid' as const,
+        type: 'avoid',
         description: 'Establish clear requirements and change control process',
         actions: [],
         cost: 800,
         timeToImplement: 5,
         effectiveness: 0.85,
         responsible: 'Business Analyst',
-        status: 'planned' as const
+        deadline: new Date(),
+        status: 'planned'
       }
     };
 
-    const strategy = strategies[category] || strategies.technical;
-    strategy.deadline = new Date();
-    strategy.deadline.setDate(strategy.deadline.getDate() + strategy.timeToImplement);
-    
-    return strategy;
+    const baseStrategy = (strategies[category] ?? strategies.technical)!;
+    const deadline = new Date();
+    deadline.setDate(deadline.getDate() + baseStrategy.timeToImplement);
+
+    return {
+      ...baseStrategy,
+      deadline
+    };
   }
 
   private createRiskIndicator(

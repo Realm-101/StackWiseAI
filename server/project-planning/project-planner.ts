@@ -3,7 +3,7 @@
  * Coordinates all planning engines and provides unified project planning interface
  */
 
-import { Project, ProjectTask, ProjectResource, ProjectBudget, ProjectPhase, ProjectMilestone } from '@shared/schema';
+import { Project, ProjectTask, ProjectResource, ProjectBudget, ProjectPhase, ProjectMilestone, TaskDependency } from '@shared/schema';
 import { timelineEngine, TimelineCalculationResult } from './timeline-engine';
 import { resourceOptimizer, ResourceOptimizationResult } from './resource-optimizer';
 import { budgetCalculator, BudgetEstimation, BudgetForecast } from './budget-calculator';
@@ -516,7 +516,7 @@ export class ProjectPlanner {
       },
       resources: {
         teamSize: Math.ceil(resources.length * 1.5),
-        requiredSkills: [...new Set(resources.flatMap(r => r.requiredSkills || []))],
+        requiredSkills: [...new Set(resources.flatMap(r => r.skillsProvided ?? []))],
         utilizationRate: 95
       },
       risks: {
@@ -551,7 +551,7 @@ export class ProjectPlanner {
       },
       resources: {
         teamSize: Math.ceil(resources.length * 0.7),
-        requiredSkills: resources.flatMap(r => r.requiredSkills || []).slice(0, 3),
+        requiredSkills: resources.flatMap(r => r.skillsProvided ?? []).slice(0, 3),
         utilizationRate: 85
       },
       risks: {
@@ -586,7 +586,7 @@ export class ProjectPlanner {
       },
       resources: {
         teamSize: Math.ceil(resources.length * 1.1),
-        requiredSkills: [...new Set(resources.flatMap(r => r.requiredSkills || [])), 'QA', 'Testing', 'Documentation'],
+        requiredSkills: [...new Set(resources.flatMap(r => r.skillsProvided ?? [])), 'QA', 'Testing', 'Documentation'],
         utilizationRate: 80
       },
       risks: {
@@ -612,7 +612,7 @@ export class ProjectPlanner {
     options: PlanningOptions
   ): Promise<TimelineCalculationResult> {
     
-    const dependencies = []; // Would get from storage or derive from tasks
+    const dependencies: TaskDependency[] = []; // Would get from storage or derive from tasks
     return await timelineEngine.calculateProjectTimeline(project.id, tasks, dependencies, phases, milestones);
   }
 
@@ -709,7 +709,7 @@ export class ProjectPlanner {
     let score = 8; // Base score
     
     if (resources.conflicts.length > 0) score -= resources.conflicts.length * 0.5;
-    if (resources.currentUtilization > 95) score -= 2;
+    if (resources.originalUtilization > 95) score -= 2;
     if (resources.improvementPercentage < 5) score -= 1;
     
     return Math.max(0, Math.min(10, score));

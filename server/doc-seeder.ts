@@ -1,5 +1,5 @@
 import { storage } from "./storage";
-import type { InsertDocCategory, InsertDocTag, InsertDocumentationArticle } from "@shared/schema";
+import type { DocCategory, DocTag, InsertDocCategory, InsertDocTag, InsertDocumentationArticle } from "@shared/schema";
 
 export async function seedDocumentationContent() {
   try {
@@ -26,7 +26,7 @@ export async function seedDocumentationContent() {
 }
 
 async function seedDocCategories() {
-  const categories: InsertDocCategory[] = [
+  const categorySeeds = [
     // Root categories
     {
       id: "getting-started",
@@ -228,13 +228,31 @@ async function seedDocCategories() {
     }
   ];
 
-  const createdCategories = [];
-  for (const category of categories) {
+  const createdCategories: Array<DocCategory & { seedId: string }> = [];
+  const slugToId = new Map<string, string>();
+
+  for (const seed of categorySeeds) {
+    const { id: seedId, parentId: parentSeedId, ...categoryData } = seed;
+    const insertCategory: InsertDocCategory = {
+      ...categoryData,
+      parentId: parentSeedId ? slugToId.get(parentSeedId) ?? null : null,
+    };
+
     try {
-      const created = await storage.createDocCategory(category);
-      createdCategories.push(created);
+      const created = await storage.createDocCategory(insertCategory);
+      createdCategories.push({ ...created, seedId });
+      slugToId.set(seedId, created.id);
+      slugToId.set(created.slug, created.id);
     } catch (error) {
-      console.log(`Category ${category.name} already exists, skipping...`);
+      const existing = await storage.getDocCategoryBySlug(categoryData.slug);
+      if (existing) {
+        createdCategories.push({ ...existing, seedId });
+        slugToId.set(seedId, existing.id);
+        slugToId.set(existing.slug, existing.id);
+        console.log(`Category ${categoryData.name} already exists, syncing reference...`);
+      } else {
+        console.error(`Failed to seed category ${categoryData.name}:`, error);
+      }
     }
   }
 
@@ -242,7 +260,7 @@ async function seedDocCategories() {
 }
 
 async function seedDocTags() {
-  const tags: InsertDocTag[] = [
+  const tagSeeds = [
     // Difficulty tags
     { id: "beginner", name: "Beginner", slug: "beginner", description: "Suitable for beginners", color: "#10b981", usageCount: 0, isVisible: true },
     { id: "intermediate", name: "Intermediate", slug: "intermediate", description: "For developers with some experience", color: "#f59e0b", usageCount: 0, isVisible: true },
@@ -274,13 +292,28 @@ async function seedDocTags() {
     { id: "api", name: "API", slug: "api", description: "API development", color: "#8b5cf6", usageCount: 0, isVisible: true }
   ];
 
-  const createdTags = [];
-  for (const tag of tags) {
+  const createdTags: Array<DocTag & { seedId: string }> = [];
+  const slugToId = new Map<string, string>();
+
+  for (const seed of tagSeeds) {
+    const { id: seedId, ...tagData } = seed;
+    const insertTag: InsertDocTag = tagData;
+
     try {
-      const created = await storage.createDocTag(tag);
-      createdTags.push(created);
+      const created = await storage.createDocTag(insertTag);
+      createdTags.push({ ...created, seedId });
+      slugToId.set(seedId, created.id);
+      slugToId.set(created.slug, created.id);
     } catch (error) {
-      console.log(`Tag ${tag.name} already exists, skipping...`);
+      const existing = await storage.getDocTagBySlug(tagData.slug);
+      if (existing) {
+        createdTags.push({ ...existing, seedId });
+        slugToId.set(seedId, existing.id);
+        slugToId.set(existing.slug, existing.id);
+        console.log(`Tag ${tagData.name} already exists, syncing reference...`);
+      } else {
+        console.error(`Failed to seed tag ${tagData.name}:`, error);
+      }
     }
   }
 
@@ -386,16 +419,9 @@ Welcome aboard, and happy coding! 🚀`,
       authorId: null, // System-generated content
       isFeatured: true,
       isPublished: true,
-      tags: ["beginner", "quickstart", "guide"],
       frameworks: [],
       languages: [],
       prerequisites: [],
-      keyPoints: [
-        "Complete your developer profile for personalized recommendations",
-        "Add your current tech stack for accurate insights",
-        "Explore all features to maximize platform value",
-        "Keep your information updated for best results"
-      ]
     },
 
     // React development guide
@@ -769,17 +795,9 @@ Keep learning and stay updated with the React ecosystem as it continues to evolv
       authorId: null,
       isFeatured: true,
       isPublished: true,
-      tags: ["react", "javascript", "typescript", "intermediate", "tutorial"],
       frameworks: ["React", "TypeScript"],
       languages: ["JavaScript", "TypeScript"],
       prerequisites: ["Basic JavaScript knowledge", "Understanding of HTML and CSS", "Familiarity with ES6+ features"],
-      keyPoints: [
-        "Modern React uses functional components and hooks",
-        "TypeScript provides better development experience and type safety",
-        "Context API is great for global state management",
-        "Performance optimization should be applied judiciously",
-        "Testing ensures component reliability"
-      ]
     },
 
     // Node.js API Development
@@ -1360,18 +1378,9 @@ Remember to regularly update your dependencies and follow security advisories fo
       authorId: null,
       isFeatured: true,
       isPublished: true,
-      tags: ["nodejs", "javascript", "typescript", "api", "security", "intermediate", "tutorial"],
       frameworks: ["Node.js", "Express", "TypeScript"],
       languages: ["JavaScript", "TypeScript"],
       prerequisites: ["Node.js basics", "HTTP protocol understanding", "JavaScript ES6+", "Basic database concepts"],
-      keyPoints: [
-        "Security should be built into the API from the ground up",
-        "Always validate and sanitize user input",
-        "Use JWT tokens for stateless authentication",
-        "Implement proper error handling and logging",
-        "Rate limiting prevents API abuse",
-        "TypeScript adds type safety to Node.js development"
-      ]
     },
 
     // Database design guide
@@ -1895,17 +1904,9 @@ This comprehensive guide provides the foundation for designing efficient, scalab
       authorId: null,
       isFeatured: false,
       isPublished: true,
-      tags: ["postgresql", "database", "advanced", "guide", "performance"],
       frameworks: ["PostgreSQL"],
       languages: ["SQL"],
       prerequisites: ["Basic SQL knowledge", "Understanding of database concepts", "PostgreSQL installation"],
-      keyPoints: [
-        "Proper normalization prevents data anomalies",
-        "Indexes are crucial for query performance but have overhead",
-        "EXPLAIN ANALYZE is your best friend for optimization",
-        "Monitor database performance regularly",
-        "Plan for growth with appropriate data types and partitioning"
-      ]
     },
 
     // CSS and Styling guide
@@ -2572,17 +2573,9 @@ Stay updated with CSS evolution as new features continue to improve the developm
       authorId: null,
       isFeatured: false,
       isPublished: true,
-      tags: ["css", "javascript", "intermediate", "guide", "responsive"],
       frameworks: ["CSS"],
       languages: ["CSS", "HTML"],
       prerequisites: ["HTML basics", "CSS fundamentals", "Understanding of web browsers"],
-      keyPoints: [
-        "Flexbox is perfect for one-dimensional layouts",
-        "CSS Grid excels at complex two-dimensional layouts", 
-        "Mobile-first approach ensures better responsive design",
-        "CSS custom properties enable powerful theming systems",
-        "Modern CSS features improve maintainability and performance"
-      ]
     },
 
     // Troubleshooting articles
@@ -3095,17 +3088,9 @@ Remember: Most issues can be resolved by clearing browser cache and logging in a
       authorId: null,
       isFeatured: true,
       isPublished: true,
-      tags: ["troubleshooting", "beginner", "guide", "debugging"],
       frameworks: [],
       languages: ["JavaScript"],
       prerequisites: ["Basic web browser usage", "Basic understanding of web applications"],
-      keyPoints: [
-        "Most issues can be resolved by clearing browser cache and cookies",
-        "Check browser console for JavaScript errors first",
-        "Verify API connectivity and authentication status",
-        "Test in different browsers to isolate browser-specific issues",
-        "Monitor network requests to identify API problems"
-      ]
     },
 
     {
@@ -3696,17 +3681,9 @@ Most performance issues can be resolved by clearing browser cache and ensuring a
       authorId: null,
       isFeatured: false,
       isPublished: true,
-      tags: ["troubleshooting", "performance", "intermediate", "optimization"],
       frameworks: [],
       languages: ["JavaScript"],
       prerequisites: ["Browser developer tools knowledge", "Basic understanding of web performance"],
-      keyPoints: [
-        "Most performance issues stem from browser cache or network problems",
-        "Use browser developer tools to identify bottlenecks",
-        "Monitor memory usage to detect leaks early",
-        "Enable hardware acceleration for better graphics performance",
-        "Regular maintenance prevents most performance degradation"
-      ]
     },
 
     // Best Practices articles
@@ -4325,17 +4302,9 @@ Remember: The "best" stack is the one that best fits your specific context, cons
       authorId: null,
       isFeatured: true,
       isPublished: true,
-      tags: ["best-practices", "intermediate", "guide", "architecture", "planning"],
       frameworks: [],
       languages: ["JavaScript", "TypeScript"],
       prerequisites: ["Basic understanding of web development", "Familiarity with different technology types"],
-      keyPoints: [
-        "Start with requirements analysis, not technology preferences",
-        "Consider total cost of ownership, not just initial development costs",
-        "Balance team expertise with project requirements",
-        "Plan for scalability and future changes from the beginning",
-        "Use a systematic evaluation framework for decision making"
-      ]
     },
 
     {
@@ -5410,17 +5379,9 @@ By following these patterns and best practices, you can build resilient, maintai
       authorId: null,
       isFeatured: true,
       isPublished: true,
-      tags: ["integrations", "advanced", "guide", "api", "architecture"],
       frameworks: ["Node.js", "Express", "TypeScript"],
       languages: ["JavaScript", "TypeScript"],
       prerequisites: ["API development experience", "Understanding of async programming", "Database knowledge"],
-      keyPoints: [
-        "Design integrations with failure scenarios in mind",
-        "Implement circuit breakers and retry logic for resilience",
-        "Use proper abstraction layers for easy provider switching",
-        "Monitor and log all integration points for debugging",
-        "Test integration points thoroughly with mocks and real services"
-      ]
     },
 
     // DevOps & Deployment articles
@@ -6515,17 +6476,9 @@ Following these practices ensures reliable, secure, and scalable production depl
       authorId: null,
       isFeatured: true,
       isPublished: true,
-      tags: ["devops", "deployment", "advanced", "tutorial", "production"],
       frameworks: ["Docker", "AWS", "Terraform", "GitHub Actions"],
       languages: ["JavaScript", "TypeScript", "YAML", "HCL"],
       prerequisites: ["Docker knowledge", "Cloud platform familiarity", "CI/CD understanding", "Infrastructure basics"],
-      keyPoints: [
-        "Automate everything with comprehensive CI/CD pipelines",
-        "Use Infrastructure as Code for reproducible deployments",
-        "Implement proper monitoring and alerting from day one",
-        "Always have a rollback strategy ready",
-        "Security should be built into the deployment process"
-      ]
     },
 
     // Security best practices article
@@ -7612,24 +7565,26 @@ Remember: Security is an ongoing process, not a one-time implementation. Regular
       authorId: null,
       isFeatured: true,
       isPublished: true,
-      tags: ["security", "advanced", "guide", "authentication", "encryption"],
       frameworks: ["Node.js", "Express"],
       languages: ["JavaScript", "TypeScript"],
       prerequisites: ["Web development experience", "Understanding of HTTP", "Basic cryptography knowledge", "Authentication concepts"],
-      keyPoints: [
-        "Security must be built into every layer of your application",
-        "Implement strong authentication with multi-factor authentication",
-        "Always validate and sanitize user input to prevent injection attacks",
-        "Use encryption for sensitive data both at rest and in transit",
-        "Monitor security events and respond to threats quickly"
-      ]
     }
   ];
+
+  const categoryMap = new Map<string, string>();
+  for (const category of categories) {
+    if (category.id) categoryMap.set(category.id, category.id);
+    if ((category as any).slug) categoryMap.set((category as any).slug, category.id);
+    if ((category as any).seedId) categoryMap.set((category as any).seedId, category.id);
+  }
 
   const createdArticles = [];
   for (const article of articles) {
     try {
-      const created = await storage.createDocumentationArticle(article);
+      const categoryId = categoryMap.get(article.categoryId) ?? article.categoryId;
+      const articleClone = { ...article, categoryId };
+      delete (articleClone as any).tags;
+      const created = await storage.createDocumentationArticle(articleClone as InsertDocumentationArticle);
       createdArticles.push(created);
     } catch (error) {
       console.log(`Article "${article.title}" may already exist, skipping...`);

@@ -5,7 +5,7 @@ import { setupAuth } from "./auth";
 import { generateBusinessIdeas, generateEnhancedBusinessIdeas, generateTechRoadmap, getContextualRecommendations, generateProjectTasks, optimizeTaskSequencing, generateTaskRefinements } from "./gemini";
 import { GitHubRepositoryAnalyzer } from "./github-analyzer";
 import { seedDocumentationContent } from "./doc-seeder";
-import { DiscoveryEngine } from "./discovery/discovery-engine";
+import { DiscoveryEngine, mapToDiscoveryToolDto } from "./discovery/discovery-engine";
 import { projectPlanner } from "./project-planning/project-planner";
 import { timelineEngine } from "./project-planning/timeline-engine";
 import { resourceOptimizer } from "./project-planning/resource-optimizer";
@@ -1064,8 +1064,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Add all tools from template to user's stack
-      const toolsToAdd = selection.toolIds && selection.toolIds.length > 0 
-        ? selectedTemplate.tools.filter(tool => selection.toolIds.includes(tool.id))
+      const selectedToolIds = selection.toolIds ?? [];
+      const toolsToAdd = selectedToolIds.length > 0
+        ? selectedTemplate.tools.filter(tool => selectedToolIds.includes(tool.id))
         : selectedTemplate.tools;
 
       const addedTools = [];
@@ -1566,22 +1567,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userContext = await storage.getUserAIContext(req.user!.id);
       
       // Convert to GeneratedTask format for AI optimization
-      const generatedTasks = tasks.map(task => ({
-        title: task.title,
-        description: task.description,
-        category: task.category,
-        priority: task.priority as "low" | "medium" | "high" | "urgent",
-        complexity: task.complexity as "low" | "medium" | "high",
-        estimatedHours: parseFloat(task.estimatedHours || "0"),
-        estimatedDays: parseFloat(task.estimatedDays || "0"),
-        technicalRequirements: task.technicalRequirements || [],
-        acceptanceCriteria: task.acceptanceCriteria || [],
-        suggestedTools: task.suggestedTools || [],
-        requiredTools: task.requiredTools || [],
-        costEstimate: parseFloat(task.costEstimate || "0"),
-        resourceRequirements: task.resourceRequirements || { skillsNeeded: [] },
-        dependencies: [] // Will be populated from database relationships
-      }));
+      const generatedTasks = tasks.map(task => {
+        const requirements = task.resourceRequirements as {
+          skillsNeeded?: unknown;
+          teamMembers?: unknown;
+          externalResources?: unknown;
+        } | null;
+
+        const skillsNeeded = Array.isArray(requirements?.skillsNeeded)
+          ? (requirements!.skillsNeeded as unknown[]).filter((skill): skill is string => typeof skill === 'string')
+          : [];
+
+        const teamMembers = typeof requirements?.teamMembers === 'number' ? requirements.teamMembers : undefined;
+        const externalResources = Array.isArray(requirements?.externalResources)
+          ? (requirements.externalResources as unknown[]).filter((value): value is string => typeof value === 'string')
+          : undefined;
+
+        return {
+          title: task.title,
+          description: task.description,
+          category: task.category,
+          priority: task.priority as "low" | "medium" | "high" | "urgent",
+          complexity: task.complexity as "low" | "medium" | "high",
+          estimatedHours: parseFloat(task.estimatedHours || "0"),
+          estimatedDays: parseFloat(task.estimatedDays || "0"),
+          technicalRequirements: task.technicalRequirements || [],
+          acceptanceCriteria: task.acceptanceCriteria || [],
+          suggestedTools: task.suggestedTools || [],
+          requiredTools: task.requiredTools || [],
+          costEstimate: parseFloat(task.costEstimate || "0"),
+          resourceRequirements: {
+            skillsNeeded,
+            ...(typeof teamMembers === 'number' ? { teamMembers } : {}),
+            ...(externalResources ? { externalResources } : {})
+          },
+          dependencies: [] // Will be populated from database relationships
+        };
+      });
 
       const optimization = await optimizeTaskSequencing(generatedTasks, userContext);
       
@@ -2331,7 +2353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       const response: TrendingToolsResponse = {
-        tools: trendingTools.map(tool => ({ ...tool })),
+        tools: trendingTools.map(mapToDiscoveryToolDto),
         totalCount: trendingTools.length,
         timeframe: filters.timeframe,
         lastUpdated: new Date().toISOString(),
@@ -2395,45 +2417,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       }
 
-      // Pagination
-      const startIndex = filters.offset;
-      const endIndex = startIndex + filters.limit;
-      const paginatedResults = filteredResults.slice(startIndex, endIndex);
-
-      const response: DiscoverySearchResponse = {
-        tools: paginatedResults.map(tool => ({ ...tool })),
-        totalCount: filteredResults.length,
-        facets: {
-          categories: Array.from(new Set(filteredResults.map(t => t.category)))
-            .map(cat => ({ 
-              category: cat, 
-              count: filteredResults.filter(t => t.category === cat).length 
-            })),
-          sourceTypes: Array.from(new Set(filteredResults.map(t => t.sourceType)))
-            .map(type => ({ 
-              type, 
-              count: filteredResults.filter(t => t.sourceType === type).length 
-            })),
-          languages: Array.from(new Set(filteredResults.flatMap(t => t.languages || [])))
-            .map(lang => ({ 
-              language: lang, 
-              count: filteredResults.filter(t => t.languages?.includes(lang)).length 
-            })),
-          pricingModels: Array.from(new Set(filteredResults.map(t => t.pricingModel)))
-            .map(model => ({ 
-              model, 
-              count: filteredResults.filter(t => t.pricingModel === model).length 
-            })),
-          tags: Array.from(new Set(filteredResults.flatMap(t => t.tags || [])))
-            .slice(0, 20) // Limit tags for performance
-            .map(tag => ({ 
-              tag, 
-              count: filteredResults.filter(t => t.tags?.includes(tag)).length 
-            })),
-        },
-        searchTime: Date.now(), // Simplified - would calculate actual search time
-      };
-
+      // Pagination
+      const startIndex = filters.offset;
+      const endIndex = startIndex + filters.limit;
+      const dtoFilteredResults = filteredResults.map(mapToDiscoveryToolDto);
+      const paginatedResults = dtoFilteredResults.slice(startIndex, endIndex);
+
+      const response: DiscoverySearchResponse = {
+        tools: paginatedResults,
+        totalCount: dtoFilteredResults.length,
+        facets: {
+          categories: Array.from(new Set(dtoFilteredResults.map(t => t.category)))
+            .map(cat => ({ 
+              category: cat, 
+              count: dtoFilteredResults.filter(t => t.category === cat).length 
+            })),
+          sourceTypes: Array.from(new Set(dtoFilteredResults.map(t => t.sourceType)))
+            .map(type => ({ 
+              type, 
+              count: dtoFilteredResults.filter(t => t.sourceType === type).length 
+            })),
+          languages: Array.from(new Set(dtoFilteredResults.flatMap(t => t.languages)))
+            .map(lang => ({ 
+              language: lang, 
+              count: dtoFilteredResults.filter(t => t.languages.includes(lang)).length 
+            })),
+          pricingModels: Array.from(new Set(dtoFilteredResults.map(t => t.pricingModel)))
+            .map(model => ({ 
+              model, 
+              count: dtoFilteredResults.filter(t => t.pricingModel === model).length 
+            })),
+          tags: Array.from(new Set(dtoFilteredResults.flatMap(t => t.tags)))
+            .slice(0, 20) // Limit tags for performance
+            .map(tag => ({ 
+              tag, 
+              count: dtoFilteredResults.filter(t => t.tags.includes(tag)).length 
+            })),
+        },
+        searchTime: Date.now(), // Simplified - would calculate actual search time
+      };
       res.json(response);
     } catch (error) {
       console.error("Error searching discovery tools:", error);
@@ -4002,3 +4024,9 @@ async function importToolsFromCSV() {
     console.error("Error importing tools from CSV:", error);
   }
 }
+
+
+
+
+
+

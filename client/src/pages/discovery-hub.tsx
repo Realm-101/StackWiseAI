@@ -31,7 +31,7 @@ import Navigation from "@/components/layout/navigation";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { 
-  DiscoveredTool, 
+  DiscoveryToolDto, 
   DiscoverySearchRequest, 
   DiscoveryTrendingRequest,
   TrendingToolsResponse,
@@ -74,7 +74,7 @@ const pricingColors = {
 };
 
 interface ToolDiscoveryCardProps {
-  tool: DiscoveredTool;
+  tool: DiscoveryToolDto;
   onAddTool: (toolId: string) => void;
   onEvaluate: (toolId: string) => void;
   isAdding: boolean;
@@ -611,3 +611,4 @@ export default function DiscoveryHub() {
     </div>
   );
 }
+

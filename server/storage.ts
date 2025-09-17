@@ -128,6 +128,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, sql, desc, asc, like, ilike, count, avg, exists, inArray, or, isNull } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import session from "express-session";
 import createMemoryStore from "memorystore";
 
@@ -626,14 +627,15 @@ export interface IStorage {
     totalProjects: number;
     activeProjects: number;
     completedProjects: number;
-    overBudgetProjects: number;
-    behindScheduleProjects: number;
-    averageProjectDuration: number;
-    totalBudgetAllocated: number;
-    totalBudgetSpent: number;
-    averageResourceUtilization: number;
-    topPerformingProjects: Array<{ projectId: string; name: string; healthScore: number }>;
-    riskProjects: Array<{ projectId: string; name: string; riskLevel: string }>;
+    totalBudget: number;
+    spentBudget: number;
+    averageCompletion: number;
+    projectsByStatus: Array<{ status: string; count: number; percentage: number }>;
+    projectsByType: Array<{ type: string; count: number }>;
+    upcomingMilestones: number;
+    overdueTasks: number;
+    teamUtilization: number;
+    budgetVariance: number;
   }>;
   
   // Advanced project planning operations
@@ -701,30 +703,29 @@ export interface IStorage {
   
   // Portfolio management operations
   getPortfolioOverview(userId: string): Promise<{
-    projects: Array<Project & {
-      phases: ProjectPhase[];
-      currentMilestone: ProjectMilestone | null;
-      healthScore: number;
-      progressPercentage: number;
+    recentActivity: Array<{
+      id: string;
+      projectName: string;
+      action: string;
+      timestamp: string;
+      actor: string;
     }>;
-    resourceCapacity: {
-      totalCapacity: number;
-      usedCapacity: number;
-      availableCapacity: number;
-      utilizationRate: number;
-    };
-    budgetOverview: {
-      totalAllocated: number;
-      totalSpent: number;
-      totalRemaining: number;
-      projectedOverrun: number;
-    };
-    timelineInsights: {
-      onTrackProjects: number;
-      delayedProjects: number;
-      aheadOfScheduleProjects: number;
-      averageScheduleVariance: number;
-    };
+    criticalAlerts: Array<{
+      id: string;
+      type: 'budget' | 'timeline' | 'resource' | 'risk';
+      message: string;
+      severity: 'low' | 'medium' | 'high' | 'critical';
+      projectId: string;
+      projectName: string;
+    }>;
+    upcomingDeadlines: Array<{
+      id: string;
+      name: string;
+      projectName: string;
+      dueDate: string;
+      type: 'milestone' | 'deliverable' | 'phase';
+      status: string;
+    }>;
   }>;
   
   optimizePortfolioResources(userId: string): Promise<{
@@ -2684,21 +2685,25 @@ export class DatabaseStorage implements IStorage {
     limit?: number;
     offset?: number;
   } = {}): Promise<Project[]> {
-    let query = db.select().from(projects).where(eq(projects.userId, userId));
+    const conditions: SQL[] = [eq(projects.userId, userId)];
 
     if (filters.status) {
-      query = query.where(eq(projects.status, filters.status));
+      conditions.push(eq(projects.status, filters.status));
     }
     if (filters.projectType) {
-      query = query.where(eq(projects.projectType, filters.projectType));
+      conditions.push(eq(projects.projectType, filters.projectType));
     }
     if (filters.priority) {
-      query = query.where(eq(projects.priority, filters.priority));
+      conditions.push(eq(projects.priority, filters.priority));
     }
 
-    const result = await query.orderBy(desc(projects.lastActivityAt), desc(projects.createdAt));
+    const whereCondition = conditions.length === 1 ? conditions[0] : and(...conditions);
 
-    // Apply limit and offset manually since Drizzle chaining might not work as expected
+    const result = await db.select()
+      .from(projects)
+      .where(whereCondition)
+      .orderBy(desc(projects.lastActivityAt), desc(projects.createdAt));
+
     let filteredResult = result;
     if (filters.offset) {
       filteredResult = filteredResult.slice(filters.offset);
@@ -2826,14 +2831,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getProjectResources(projectId: string, resourceType?: string): Promise<ProjectResource[]> {
-    let query = db.select().from(projectResources)
-      .where(eq(projectResources.projectId, projectId));
+    const conditions: SQL[] = [eq(projectResources.projectId, projectId)];
 
     if (resourceType) {
-      query = query.where(eq(projectResources.resourceType, resourceType));
+      conditions.push(eq(projectResources.resourceType, resourceType));
     }
 
-    return query.orderBy(asc(projectResources.createdAt));
+    const whereCondition = conditions.length === 1 ? conditions[0] : and(...conditions);
+
+    return db.select()
+      .from(projectResources)
+      .where(whereCondition)
+      .orderBy(asc(projectResources.createdAt));
   }
 
   async updateProjectResource(id: string, updates: Partial<InsertProjectResource>): Promise<ProjectResource | undefined> {
@@ -3250,24 +3259,21 @@ export class DatabaseStorage implements IStorage {
     budgetVariance: number;
   }> {
     const userProjects = await this.getUserProjects(userId);
-    
+
     const totalProjects = userProjects.length;
     const activeProjects = userProjects.filter(p => p.status === 'active' || p.status === 'in_progress').length;
     const completedProjects = userProjects.filter(p => p.status === 'completed').length;
-    
-    // Calculate budget metrics
-    const totalBudget = userProjects.reduce((sum, p) => sum + parseFloat(p.totalBudget || '0'), 0);
-    const spentBudget = userProjects.reduce((sum, p) => sum + parseFloat(p.spentBudget || '0'), 0);
+
+    const totalBudget = userProjects.reduce((sum, project) => sum + parseFloat(project.totalBudget || '0'), 0);
+    const spentBudget = userProjects.reduce((sum, project) => sum + parseFloat(project.spentBudget || '0'), 0);
     const budgetVariance = totalBudget > 0 ? ((spentBudget - totalBudget) / totalBudget) * 100 : 0;
-    
-    // Calculate average completion
-    const averageCompletion = totalProjects > 0 
-      ? userProjects.reduce((sum, p) => sum + parseFloat(p.completionPercentage?.toString() || '0'), 0) / totalProjects
+
+    const averageCompletion = totalProjects > 0
+      ? userProjects.reduce((sum, project) => sum + parseFloat(project.overallProgress?.toString() || '0'), 0) / totalProjects
       : 0;
 
-    // Projects by status
-    const statusCounts = userProjects.reduce((acc, p) => {
-      const status = p.status || 'unknown';
+    const statusCounts = userProjects.reduce((acc, project) => {
+      const status = project.status || 'unknown';
       acc[status] = (acc[status] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
@@ -3278,9 +3284,8 @@ export class DatabaseStorage implements IStorage {
       percentage: totalProjects > 0 ? (count / totalProjects) * 100 : 0
     }));
 
-    // Projects by type
-    const typeCounts = userProjects.reduce((acc, p) => {
-      const type = p.projectType || 'other';
+    const typeCounts = userProjects.reduce((acc, project) => {
+      const type = project.projectType || 'other';
       acc[type] = (acc[type] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
@@ -3290,15 +3295,22 @@ export class DatabaseStorage implements IStorage {
       count
     }));
 
-    // Get upcoming milestones
-    const upcomingMilestones = await this.getUpcomingMilestonesCount(userId);
-    
-    // Get overdue tasks
-    const overdueTasks = await this.getOverdueTasksCount(userId);
-    
-    // Calculate team utilization (simplified)
+    const upcomingMilestonesCount = (await this.getUpcomingMilestones(userId, 30)).length;
+    const overdueTaskRecords = await db.select({
+      dueDate: projectTasks.dueDate,
+      status: projectTasks.status
+    })
+      .from(projectTasks)
+      .where(eq(projectTasks.userId, userId));
+
+    const overdueTasksCount = overdueTaskRecords.filter(task =>
+      task.dueDate !== null &&
+      task.dueDate < new Date() &&
+      task.status !== 'completed'
+    ).length;
+
     const teamUtilization = userProjects.length > 0
-      ? userProjects.reduce((sum, p) => sum + (p.teamSize || 1), 0) / userProjects.length * 20 // Simplified calculation
+      ? userProjects.reduce((sum, project) => sum + (project.teamSize || 1), 0) / userProjects.length * 20
       : 0;
 
     return {
@@ -3310,321 +3322,13 @@ export class DatabaseStorage implements IStorage {
       averageCompletion,
       projectsByStatus,
       projectsByType,
-      upcomingMilestones,
-      overdueTasks,
+      upcomingMilestones: upcomingMilestonesCount,
+      overdueTasks: overdueTasksCount,
       teamUtilization,
       budgetVariance
     };
   }
 
-  // Advanced project planning operations
-  async optimizeProjectSchedule(projectId: string): Promise<{
-    originalDuration: number;
-    optimizedDuration: number;
-    timeSavings: number;
-    recommendations: string[];
-    newTimelines: ProjectTimeline[];
-  }> {
-    const timelines = await this.getProjectTimelines(projectId);
-    const scheduleData = await this.calculateProjectSchedule(projectId);
-    
-    const originalDuration = scheduleData.totalDuration;
-    
-    // Simple optimization: identify potential parallel work
-    let optimizedDuration = originalDuration;
-    const recommendations: string[] = [];
-    
-    // Find tasks that could be parallelized
-    const sequentialTasks = timelines.filter(t => !t.isCriticalPath);
-    if (sequentialTasks.length > 2) {
-      optimizedDuration = Math.max(originalDuration * 0.8, originalDuration - 7); // Max 20% or 7 days improvement
-      recommendations.push('Parallelize non-critical tasks to reduce timeline');
-      recommendations.push('Consider cross-training team members for flexibility');
-    }
-    
-    // Check for resource conflicts
-    const resourceAllocations = await this.analyzeResourceConflicts(timelines[0]?.projectId || '');
-    if (resourceAllocations.conflicts.length > 0) {
-      recommendations.push('Resolve resource conflicts to avoid delays');
-      recommendations.push('Consider hiring additional team members for bottleneck roles');
-    }
-
-    const timeSavings = originalDuration - optimizedDuration;
-    
-    return {
-      originalDuration,
-      optimizedDuration,
-      timeSavings,
-      recommendations,
-      newTimelines: timelines // Would need actual optimization logic
-    };
-  }
-
-  async analyzeResourceConflicts(userId: string): Promise<{
-    conflicts: Array<{
-      resourceId: string;
-      resourceName: string;
-      conflictPeriod: { start: Date; end: Date };
-      overallocation: number;
-      affectedProjects: Array<{ projectId: string; projectName: string; allocation: number }>;
-      suggestions: string[];
-    }>;
-    resolutionStrategies: string[];
-  }> {
-    const resourceAllocations = await this.getUserResourceAllocations(userId);
-    
-    // Group by resource to find conflicts
-    const resourceMap = new Map<string, (ProjectResource & { project: Project })[]>();
-    resourceAllocations.forEach(allocation => {
-      const key = allocation.resourceId || allocation.resourceName;
-      if (!resourceMap.has(key)) {
-        resourceMap.set(key, []);
-      }
-      resourceMap.get(key)!.push(allocation);
-    });
-
-    const conflicts: Array<{
-      resourceId: string;
-      resourceName: string;
-      conflictPeriod: { start: Date; end: Date };
-      overallocation: number;
-      affectedProjects: Array<{ projectId: string; projectName: string; allocation: number }>;
-      suggestions: string[];
-    }> = [];
-
-    for (const [resourceId, allocations] of resourceMap) {
-      // Check for over-allocation (> 100%)
-      const totalAllocation = allocations.reduce((sum, a) => sum + parseFloat(a.allocationPercentage || '0'), 0);
-      
-      if (totalAllocation > 100) {
-        const overallocation = totalAllocation - 100;
-        const conflictStart = new Date(Math.min(...allocations.map(a => a.availableFrom?.getTime() || Date.now())));
-        const conflictEnd = new Date(Math.max(...allocations.map(a => a.availableUntil?.getTime() || Date.now())));
-        
-        conflicts.push({
-          resourceId,
-          resourceName: allocations[0].resourceName,
-          conflictPeriod: { start: conflictStart, end: conflictEnd },
-          overallocation,
-          affectedProjects: allocations.map(a => ({
-            projectId: a.project.id,
-            projectName: a.project.name,
-            allocation: parseFloat(a.allocationPercentage || '0')
-          })),
-          suggestions: [
-            'Reduce allocation percentage on lower priority projects',
-            'Consider hiring additional resources with similar skills',
-            'Adjust project timelines to stagger resource usage'
-          ]
-        });
-      }
-    }
-
-    const resolutionStrategies = conflicts.length > 0 ? [
-      'Implement resource leveling across all projects',
-      'Consider cross-training team members',
-      'Evaluate outsourcing options for non-critical tasks',
-      'Reassess project priorities and timelines'
-    ] : ['Current resource allocation is optimal'];
-
-    return { conflicts, resolutionStrategies };
-  }
-
-  async calculateProjectRisk(projectId: string): Promise<{
-    overallRiskScore: number;
-    riskFactors: Array<{
-      category: string;
-      risk: string;
-      probability: number;
-      impact: number;
-      riskScore: number;
-      mitigation: string;
-    }>;
-    recommendations: string[];
-    contingencyBudget: number;
-  }> {
-    const project = await this.getProject(projectId);
-    const budgetSummary = await this.getBudgetSummary(projectId);
-    const scheduleData = await this.calculateProjectSchedule(projectId);
-    
-    if (!project) {
-      throw new Error('Project not found');
-    }
-
-    const riskFactors: Array<{
-      category: string;
-      risk: string;
-      probability: number;
-      impact: number;
-      riskScore: number;
-      mitigation: string;
-    }> = [];
-
-    // Budget risk analysis
-    if (budgetSummary.totalSpent / budgetSummary.totalAllocated > 0.8) {
-      riskFactors.push({
-        category: 'Budget',
-        risk: 'Budget overrun likely',
-        probability: 0.7,
-        impact: 0.8,
-        riskScore: 0.56,
-        mitigation: 'Implement strict budget controls and regular review'
-      });
-    }
-
-    // Schedule risk analysis
-    if (scheduleData.completionProbability < 0.7) {
-      riskFactors.push({
-        category: 'Schedule',
-        risk: 'Project likely to be delayed',
-        probability: 0.6,
-        impact: 0.7,
-        riskScore: 0.42,
-        mitigation: 'Add buffer time and reassess critical path'
-      });
-    }
-
-    // Complexity risk analysis
-    if (project.complexity === 'high' || project.complexity === 'expert') {
-      riskFactors.push({
-        category: 'Technical',
-        risk: 'High complexity may cause implementation delays',
-        probability: 0.5,
-        impact: 0.6,
-        riskScore: 0.30,
-        mitigation: 'Break down complex tasks and add technical review checkpoints'
-      });
-    }
-
-    const overallRiskScore = riskFactors.length > 0 
-      ? riskFactors.reduce((sum, rf) => sum + rf.riskScore, 0) / riskFactors.length 
-      : 0.1;
-
-    const contingencyBudget = budgetSummary.totalAllocated * (0.1 + overallRiskScore * 0.2);
-
-    const recommendations = [
-      'Implement regular risk assessment meetings',
-      'Maintain detailed risk register with mitigation plans',
-      'Establish clear escalation procedures for risk events',
-      'Consider insurance or contractual protections for high-impact risks'
-    ];
-
-    return {
-      overallRiskScore,
-      riskFactors,
-      recommendations,
-      contingencyBudget
-    };
-  }
-
-  async getProjectDependencies(projectId: string): Promise<{
-    internal: Array<{
-      dependentTask: string;
-      prerequisiteTask: string;
-      dependencyType: string;
-      lagTime: number;
-      criticality: string;
-    }>;
-    external: Array<{
-      task: string;
-      dependency: string;
-      vendor: string;
-      expectedDate: Date;
-      status: string;
-    }>;
-    criticalPath: string[];
-  }> {
-    // Get task dependencies
-    const dependencies = await db.select()
-      .from(taskDependencies)
-      .innerJoin(projectTasks, eq(taskDependencies.taskId, projectTasks.id))
-      .where(sql`EXISTS (SELECT 1 FROM ${projectTasks} pt WHERE pt.id = ${taskDependencies.taskId} AND pt.userId = ${projectId})`);
-
-    const internal = dependencies.map((dep: any) => ({
-      dependentTask: dep.task_dependencies.taskId,
-      prerequisiteTask: dep.task_dependencies.dependsOnTaskId,
-      dependencyType: dep.task_dependencies.dependencyType,
-      lagTime: dep.task_dependencies.lagTime || 0,
-      criticality: 'medium' // Simplified
-    }));
-
-    // External dependencies (simplified - would need separate table)
-    const external: Array<{
-      task: string;
-      dependency: string;
-      vendor: string;
-      expectedDate: Date;
-      status: string;
-    }> = [];
-
-    const scheduleData = await this.calculateProjectSchedule(projectId);
-    const criticalPath = scheduleData.criticalPath;
-
-    return { internal, external, criticalPath };
-  }
-
-  async forecastProjectCompletion(projectId: string): Promise<{
-    probabilisticCompletion: Array<{ date: Date; probability: number }>;
-    mostLikelyCompletion: Date;
-    optimisticCompletion: Date;
-    pessimisticCompletion: Date;
-    confidenceInterval: { lower: Date; upper: Date };
-    keyRisks: string[];
-    recommendations: string[];
-  }> {
-    const scheduleData = await this.calculateProjectSchedule(projectId);
-    const riskData = await this.calculateProjectRisk(projectId);
-    
-    const baseCompletion = scheduleData.endDate;
-    const riskMultiplier = 1 + riskData.overallRiskScore;
-    
-    // Calculate different completion scenarios
-    const optimisticDays = Math.floor(scheduleData.totalDuration * 0.8);
-    const pessimisticDays = Math.floor(scheduleData.totalDuration * riskMultiplier * 1.5);
-    const mostLikelyDays = Math.floor(scheduleData.totalDuration * riskMultiplier);
-
-    const optimisticCompletion = new Date(scheduleData.startDate);
-    optimisticCompletion.setDate(optimisticCompletion.getDate() + optimisticDays);
-    
-    const pessimisticCompletion = new Date(scheduleData.startDate);
-    pessimisticCompletion.setDate(pessimisticCompletion.getDate() + pessimisticDays);
-    
-    const mostLikelyCompletion = new Date(scheduleData.startDate);
-    mostLikelyCompletion.setDate(mostLikelyCompletion.getDate() + mostLikelyDays);
-
-    // Probabilistic completion dates
-    const probabilisticCompletion = [
-      { date: optimisticCompletion, probability: 0.1 },
-      { date: mostLikelyCompletion, probability: 0.6 },
-      { date: pessimisticCompletion, probability: 0.9 }
-    ];
-
-    const confidenceInterval = {
-      lower: optimisticCompletion,
-      upper: pessimisticCompletion
-    };
-
-    const keyRisks = riskData.riskFactors.map(rf => rf.risk);
-    
-    const recommendations = [
-      'Monitor critical path tasks closely',
-      'Implement buffer time for high-risk activities',
-      'Regular stakeholder communication on progress',
-      'Prepare contingency plans for identified risks'
-    ];
-
-    return {
-      probabilisticCompletion,
-      mostLikelyCompletion,
-      optimisticCompletion,
-      pessimisticCompletion,
-      confidenceInterval,
-      keyRisks,
-      recommendations
-    };
-  }
-
-  // Portfolio management operations
   async getPortfolioOverview(userId: string): Promise<{
     recentActivity: Array<{
       id: string;
@@ -3651,17 +3355,15 @@ export class DatabaseStorage implements IStorage {
     }>;
   }> {
     const projects = await this.getUserProjects(userId);
-    
-    // Generate recent activity (simplified - in real implementation would come from audit log)
+
     const recentActivity = projects.slice(0, 5).map((project, index) => ({
       id: `activity-${index}`,
       projectName: project.name,
       action: index % 2 === 0 ? 'Updated project status' : 'Milestone completed',
-      timestamp: new Date(Date.now() - index * 3600000).toISOString(), // Hours ago
+      timestamp: new Date(Date.now() - index * 3600000).toISOString(),
       actor: 'Current User'
     }));
 
-    // Generate critical alerts based on project health
     const criticalAlerts: Array<{
       id: string;
       type: 'budget' | 'timeline' | 'resource' | 'risk';
@@ -3674,8 +3376,7 @@ export class DatabaseStorage implements IStorage {
     projects.forEach((project) => {
       const spentBudget = parseFloat(project.spentBudget || '0');
       const totalBudget = parseFloat(project.totalBudget || '0');
-      
-      // Budget alerts
+
       if (totalBudget > 0 && spentBudget > totalBudget * 0.9) {
         criticalAlerts.push({
           id: `budget-${project.id}`,
@@ -3687,7 +3388,6 @@ export class DatabaseStorage implements IStorage {
         });
       }
 
-      // Timeline alerts
       if (project.targetEndDate) {
         const daysRemaining = Math.ceil((new Date(project.targetEndDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
         if (daysRemaining < 7 && daysRemaining > 0) {
@@ -3703,7 +3403,6 @@ export class DatabaseStorage implements IStorage {
       }
     });
 
-    // Get upcoming deadlines from milestones
     const upcomingDeadlines: Array<{
       id: string;
       name: string;
@@ -3713,12 +3412,12 @@ export class DatabaseStorage implements IStorage {
       status: string;
     }> = [];
 
-    for (const project of projects.slice(0, 10)) { // Limit to prevent performance issues
+    for (const project of projects.slice(0, 10)) {
       try {
         const milestones = await this.getProjectMilestones(project.id);
         milestones
-          .filter(m => m.targetDate && new Date(m.targetDate) > new Date())
-          .slice(0, 3) // Limit per project
+          .filter(milestone => milestone.targetDate && new Date(milestone.targetDate) > new Date())
+          .slice(0, 3)
           .forEach(milestone => {
             upcomingDeadlines.push({
               id: milestone.id,
@@ -3730,58 +3429,15 @@ export class DatabaseStorage implements IStorage {
             });
           });
       } catch (error) {
-        // Skip if milestones fetch fails
-        console.log(`Could not fetch milestones for project ${project.id}`);
+        console.error(`Failed to fetch milestones for project ${project.id}:`, error);
       }
     }
-
-    // Sort by due date
-    upcomingDeadlines.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
     return {
       recentActivity,
-      criticalAlerts: criticalAlerts.slice(0, 10), // Limit alerts
-      upcomingDeadlines: upcomingDeadlines.slice(0, 10) // Limit deadlines
+      criticalAlerts,
+      upcomingDeadlines
     };
-  }
-
-  // Helper methods for analytics
-  async getUpcomingMilestonesCount(userId: string): Promise<number> {
-    try {
-      const projects = await this.getUserProjects(userId);
-      let totalUpcoming = 0;
-
-      for (const project of projects) {
-        const milestones = await this.getProjectMilestones(project.id);
-        const upcoming = milestones.filter(m => 
-          m.targetDate && 
-          new Date(m.targetDate) > new Date() &&
-          new Date(m.targetDate) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // Next 30 days
-        ).length;
-        totalUpcoming += upcoming;
-      }
-
-      return totalUpcoming;
-    } catch (error) {
-      console.log('Error getting upcoming milestones count:', error);
-      return 0;
-    }
-  }
-
-  async getOverdueTasksCount(userId: string): Promise<number> {
-    try {
-      const tasks = await this.getUserTasks(userId);
-      const now = new Date();
-      
-      return tasks.filter(task => 
-        task.dueDate && 
-        new Date(task.dueDate) < now &&
-        task.status !== 'completed'
-      ).length;
-    } catch (error) {
-      console.log('Error getting overdue tasks count:', error);
-      return 0;
-    }
   }
 
   async optimizePortfolioResources(userId: string): Promise<{
@@ -3795,25 +3451,36 @@ export class DatabaseStorage implements IStorage {
     }>;
     recommendations: string[];
   }> {
-    const portfolioOverview = await this.getPortfolioOverview(userId);
-    const resourceConflicts = await this.analyzeResourceConflicts(userId);
-    
-    const currentUtilization = portfolioOverview.resourceCapacity.utilizationRate;
-    
-    // Simple optimization: target 85% utilization
+    const projects = await this.getUserProjects(userId);
+    const projectResources = await Promise.all(projects.map(project => this.getProjectResources(project.id)));
+
+    let utilizationSum = 0;
+    let resourceCount = 0;
+
+    projectResources.forEach(resources => {
+      resources.forEach(resource => {
+        const utilization = resource.utilizationRate
+          ? parseFloat(resource.utilizationRate)
+          : parseFloat(resource.allocationPercentage || '0');
+
+        if (!Number.isNaN(utilization)) {
+          utilizationSum += utilization;
+          resourceCount += 1;
+        }
+      });
+    });
+
+    const currentUtilization = resourceCount > 0 ? utilizationSum / resourceCount : 0;
+
     const targetUtilization = 85;
     const optimizedUtilization = Math.min(targetUtilization, currentUtilization + 10);
-    
-    // Generate resource reallocation suggestions (simplified)
-    const resourceReallocation = resourceConflicts.conflicts.map(conflict => ({
-      resourceId: conflict.resourceId,
-      currentProjects: conflict.affectedProjects.map(p => p.projectId),
-      suggestedProjects: conflict.affectedProjects
-        .sort((a, b) => b.allocation - a.allocation)
-        .slice(0, 2)
-        .map(p => p.projectId),
-      efficiencyGain: conflict.overallocation * 0.1
-    }));
+
+    const resourceReallocation: Array<{
+      resourceId: string;
+      currentProjects: string[];
+      suggestedProjects: string[];
+      efficiencyGain: number;
+    }> = [];
 
     const recommendations = [
       'Balance resource allocation across projects',
@@ -3833,3 +3500,5 @@ export class DatabaseStorage implements IStorage {
 }
 
 export const storage = new DatabaseStorage();
+
+

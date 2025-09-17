@@ -2055,13 +2055,47 @@ export const updateDiscoveryPreferencesSchema = z.object({
 });
 
 // Discovery response interfaces
+export interface DiscoveryToolDto {
+  id: string;
+  name: string;
+  description?: string | null;
+  category: string;
+  subCategory?: string | null;
+  sourceType: string;
+  sourceId: string;
+  sourceUrl?: string | null;
+  repositoryUrl?: string | null;
+  documentationUrl?: string | null;
+  homepageUrl?: string | null;
+  languages: string[];
+  frameworks: string[];
+  tags: string[];
+  keywords: string[];
+  pricingModel: string;
+  costCategory: string;
+  estimatedMonthlyCost: number | null;
+  difficultyLevel?: string | null;
+  popularityScore: number;
+  trendingScore: number;
+  qualityScore: number;
+  githubStars?: number | null;
+  githubForks?: number | null;
+  npmWeeklyDownloads?: number | null;
+  dockerPulls?: number | null;
+  packageDownloads?: number | null;
+  discoveredAt?: string | null;
+  lastUpdated?: string | null;
+  lastScanned?: string | null;
+  metrics?: ToolPopularityMetric | null;
+  evaluation?: DiscoveredToolEvaluation | null;
+}
 export interface DiscoveredToolWithMetrics extends DiscoveredTool {
   metrics?: ToolPopularityMetric;
   evaluation?: DiscoveredToolEvaluation;
 }
 
 export interface TrendingToolsResponse {
-  tools: DiscoveredToolWithMetrics[];
+  tools: DiscoveryToolDto[];
   totalCount: number;
   timeframe: string;
   lastUpdated: string;
@@ -2069,7 +2103,7 @@ export interface TrendingToolsResponse {
 }
 
 export interface DiscoverySearchResponse {
-  tools: DiscoveredToolWithMetrics[];
+  tools: DiscoveryToolDto[];
   totalCount: number;
   facets: {
     categories: Array<{ category: string; count: number }>;
@@ -2082,7 +2116,7 @@ export interface DiscoverySearchResponse {
 }
 
 export interface ToolRecommendationsResponse {
-  recommendations: DiscoveredToolWithMetrics[];
+  recommendations: DiscoveryToolDto[];
   reasoning: string[];
   basedOnStack: string[];
   confidenceScore: number;
@@ -2113,3 +2147,6 @@ export type DiscoveryTrendingRequest = z.infer<typeof discoveryTrendingSchema>;
 export type StartDiscoverySessionRequest = z.infer<typeof startDiscoverySessionSchema>;
 export type ToolEvaluationRequest = z.infer<typeof toolEvaluationSchema>;
 export type UpdateDiscoveryPreferencesRequest = z.infer<typeof updateDiscoveryPreferencesSchema>;
+
+
+

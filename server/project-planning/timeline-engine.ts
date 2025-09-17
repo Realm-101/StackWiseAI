@@ -392,28 +392,41 @@ export class TimelineEngine {
    * Calculate task duration based on complexity and effort
    */
   private calculateTaskDuration(task: ProjectTask): number {
-    // Base duration from task effort or complexity
+    // Base duration derived from estimates or complexity
     let baseDuration = 1; // Default 1 day
-    
-    if (task.effort) {
-      // Convert effort hours to days (assuming 8 hours per day)
-      baseDuration = Math.ceil(parseFloat(task.effort) / 8);
+
+    if (task.estimatedHours) {
+      baseDuration = Math.ceil(parseFloat(task.estimatedHours) / 8);
+    } else if (task.estimatedDays) {
+      baseDuration = Math.ceil(parseFloat(task.estimatedDays));
     } else if (task.complexity) {
-      // Duration based on complexity
       switch (task.complexity) {
-        case 'trivial': baseDuration = 1; break;
-        case 'easy': baseDuration = 2; break;
-        case 'medium': baseDuration = 5; break;
-        case 'hard': baseDuration = 10; break;
-        case 'expert': baseDuration = 15; break;
-        default: baseDuration = 5;
+        case 'trivial':
+        case 'low':
+          baseDuration = 1;
+          break;
+        case 'easy':
+          baseDuration = 2;
+          break;
+        case 'medium':
+          baseDuration = 5;
+          break;
+        case 'high':
+        case 'hard':
+          baseDuration = 10;
+          break;
+        case 'expert':
+          baseDuration = 15;
+          break;
+        default:
+          baseDuration = 5;
       }
     }
 
-    // Adjust for task type
-    if (task.type === 'research') baseDuration *= 1.5;
-    if (task.type === 'testing') baseDuration *= 1.2;
-    if (task.type === 'deployment') baseDuration *= 0.8;
+    const category = task.category?.toLowerCase();
+    if (category === 'research') baseDuration *= 1.5;
+    if (category === 'testing') baseDuration *= 1.2;
+    if (category === 'deployment') baseDuration *= 0.8;
 
     return Math.max(1, Math.ceil(baseDuration));
   }

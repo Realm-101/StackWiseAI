@@ -241,7 +241,8 @@ export class ResourceOptimizer {
       const requiredSkills = this.extractRequiredSkills(task);
       
       for (const resource of resources) {
-        const resourceSkills = skillDatabase.get(resource.resourceId) || [];
+        const resourceKey = resource.resourceId ?? resource.id;
+        const resourceSkills = skillDatabase.get(resourceKey) ?? (resource.skillsProvided ?? []);
         const matchScore = this.calculateSkillMatch(requiredSkills, resourceSkills);
         const missingSkills = requiredSkills.filter(skill => !resourceSkills.includes(skill));
         const overqualifiedSkills = resourceSkills.filter(skill => !requiredSkills.includes(skill));
@@ -249,7 +250,7 @@ export class ResourceOptimizer {
         skillMatches.push({
           taskId: task.id,
           requiredSkills,
-          resourceId: resource.resourceId,
+          resourceId: resourceKey,
           resourceSkills,
           matchScore,
           missingSkills,
@@ -385,7 +386,7 @@ export class ResourceOptimizer {
             hoursAllocated: parseFloat(resource.totalHoursAllocated || '0'),
             allocationPercentage: parseFloat(resource.allocationPercentage || '0'),
             priority: 'medium', // Would need actual priority mapping
-            requiredSkills: resource.requiredSkills || []
+            requiredSkills: resource.skillsProvided ?? []
           });
         }
       });
@@ -401,7 +402,7 @@ export class ResourceOptimizer {
         allocatedCapacity: totalAllocated,
         availableCapacity: Math.max(0, totalCapacity - totalAllocated),
         utilizationRate: totalAllocated / totalCapacity,
-        skills: firstResource.requiredSkills || [],
+        skills: firstResource.skillsProvided ?? [],
         costPerHour: parseFloat(firstResource.hourlyRate || '50'),
         assignments
       });
@@ -567,7 +568,7 @@ export class ResourceOptimizer {
       .filter(r => (resourceCapacity.get(r.id) || 0) >= estimatedHours)
       .map(r => ({
         resource: r,
-        skillMatch: this.calculateSkillMatch(requiredSkills, r.requiredSkills || []),
+        skillMatch: this.calculateSkillMatch(requiredSkills, r.skillsProvided ?? []),
         availability: resourceCapacity.get(r.id) || 0,
         cost: parseFloat(r.hourlyRate || '50')
       }))
@@ -588,15 +589,42 @@ export class ResourceOptimizer {
   }
 
   private extractRequiredSkills(task: ProjectTask): string[] {
-    // Extract skills from task type, complexity, and tags
-    const skills: string[] = [];
-    
-    if (task.type) skills.push(task.type);
-    if (task.complexity === 'expert') skills.push('senior_level', 'architecture');
-    if (task.complexity === 'hard') skills.push('senior_level');
-    if (task.tags) skills.push(...task.tags);
-    
-    return [...new Set(skills)];
+    // Derive skill hints from stored task metadata
+    const skills = new Set<string>();
+
+    if (task.category) {
+      skills.add(task.category);
+    }
+
+    if (task.technicalRequirements) {
+      task.technicalRequirements.forEach(requirement => {
+        if (typeof requirement === 'string' && requirement.trim().length > 0) {
+          skills.add(requirement);
+        }
+      });
+    }
+
+    const resourceRequirements = task.resourceRequirements as { skills?: unknown } | null;
+    if (resourceRequirements && typeof resourceRequirements === 'object') {
+      const requirementsSkills = (resourceRequirements as { skills?: unknown }).skills;
+      if (Array.isArray(requirementsSkills)) {
+        requirementsSkills.forEach(skill => {
+          if (typeof skill === 'string' && skill.trim().length > 0) {
+            skills.add(skill);
+          }
+        });
+      }
+    }
+
+    const complexity = task.complexity?.toLowerCase();
+    if (complexity === 'expert') {
+      skills.add('architecture');
+      skills.add('senior_level');
+    } else if (complexity === 'hard' || complexity === 'high') {
+      skills.add('senior_level');
+    }
+
+    return Array.from(skills);
   }
 
   private calculateSkillMatch(requiredSkills: string[], resourceSkills: string[]): number {
@@ -613,17 +641,28 @@ export class ResourceOptimizer {
   }
 
   private estimateTaskHours(task: ProjectTask): number {
-    if (task.effort) return parseFloat(task.effort);
-    
-    const complexityHours = {
-      'trivial': 4,
-      'easy': 8,
-      'medium': 20,
-      'hard': 40,
-      'expert': 80
+    if (task.estimatedHours) {
+      return parseFloat(task.estimatedHours);
+    }
+    if (task.estimatedDays) {
+      return parseFloat(task.estimatedDays) * 8;
+    }
+    if (task.actualHours) {
+      return parseFloat(task.actualHours);
+    }
+
+    const complexity = task.complexity?.toLowerCase();
+    const complexityHours: Record<string, number> = {
+      trivial: 4,
+      easy: 8,
+      low: 12,
+      medium: 20,
+      high: 40,
+      hard: 40,
+      expert: 80
     };
-    
-    return complexityHours[task.complexity as keyof typeof complexityHours] || 20;
+
+    return complexity ? (complexityHours[complexity] ?? 20) : 20;
   }
 
   private calculateResourceUtilization(resource: ProjectResource, dateRange: { start: Date; end: Date }): number {

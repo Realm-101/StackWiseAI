@@ -161,7 +161,7 @@ export class BudgetCalculator {
     const totalEstimatedCost = costBreakdown.categories.reduce((sum, cat) => sum + cat.estimatedCost, 0);
     
     // Generate confidence intervals using three-point estimation
-    const confidenceInterval = this.calculateConfidenceInterval(totalEstimatedCost, project.complexity);
+    const confidenceInterval = this.calculateConfidenceInterval(totalEstimatedCost, project.complexity ?? undefined);
     
     // Calculate contingency budget based on risk assessment
     const riskFactors = this.assessBudgetRisks(project, tasks, resources);
@@ -210,7 +210,7 @@ export class BudgetCalculator {
     
     const totalBudget = budgets.reduce((sum, b) => sum + parseFloat(b.allocatedAmount || '0'), 0);
     const totalSpent = budgets.reduce((sum, b) => sum + parseFloat(b.spentAmount || '0'), 0);
-    const totalCommitted = budgets.reduce((sum, b) => sum + parseFloat(b.committedAmount || '0'), 0);
+    const totalCommitted = budgets.reduce((sum, b) => sum + parseFloat(b.reservedAmount || '0'), 0);
     const totalRemaining = totalBudget - totalSpent - totalCommitted;
     const overallVariance = totalSpent - totalBudget;
 
@@ -376,7 +376,7 @@ export class BudgetCalculator {
       const efficiency = hoursAllocated > 0 ? hoursUsed / hoursAllocated : 0;
 
       return {
-        resourceId: resource.resourceId,
+        resourceId: resource.resourceId ?? resource.id,
         resourceName: resource.resourceName,
         resourceType: resource.resourceType as any || 'human',
         hourlyRate: adjustedRate,

@@ -496,13 +496,13 @@ export class GitHubClient extends BaseAPIClient {
 
   async getAwesomeLists(): Promise<any[]> {
     const awesomeQuery = 'awesome in:name topic:awesome';
-    const result = await this.makeRequest(
+    const result = await this.makeRequest<{ items?: any[] }>(
       `/search/repositories?q=${encodeURIComponent(awesomeQuery)}&sort=stars&order=desc&per_page=50`,
       {},
       'github-awesome-lists',
       3600000 // 1 hour cache
     );
-    return result.items || [];
+    return result.items ?? [];
   }
 
   transformToDiscoveredTool(repo: any): Omit<InsertDiscoveredTool, 'id'> {
