@@ -5,7 +5,7 @@ import { setupAuth } from "./auth";
 import { generateBusinessIdeas, generateEnhancedBusinessIdeas, generateTechRoadmap, getContextualRecommendations, generateProjectTasks, optimizeTaskSequencing, generateTaskRefinements } from "./gemini";
 import { GitHubRepositoryAnalyzer } from "./github-analyzer";
 import { seedDocumentationContent } from "./doc-seeder";
-import { DiscoveryEngine, mapToDiscoveryToolSummary } from "./discovery/discovery-engine";
+import { DiscoveryEngine, mapToDiscoveryToolSummary, type DiscoveryToolSource } from "./discovery/discovery-engine";
 import { projectPlanner } from "./project-planning/project-planner";
 import { timelineEngine } from "./project-planning/timeline-engine";
 import { resourceOptimizer } from "./project-planning/resource-optimizer";
@@ -65,6 +65,9 @@ import {
   type TaskGenerationParameters,
   type DocSearchRequest,
   type DocSearchResponse,
+  type DiscoveryToolSummary,
+  type DiscoveredTool,
+  type ToolPopularityMetric,
   type DiscoverySearchRequest,
   type DiscoveryTrendingRequest,
   type StartDiscoverySessionRequest,
@@ -92,6 +95,110 @@ function isZodError(error: unknown): error is { name: string; errors: Array<{ me
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication
   setupAuth(app);
+
+  const getDiscoveryPopularityScore = (tool: any): number => {
+    const value =
+      tool?.metrics?.popularity ??
+      tool?.popularityScore ??
+      tool?.popularity?.score ??
+      0;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+
+  const getDiscoveryLastUpdatedDate = (tool: any): Date | null => {
+    const value =
+      tool?.timestamps?.lastUpdated ??
+      tool?.lastUpdated ??
+      tool?.updatedAt ??
+      null;
+    if (!value) {
+      return null;
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const getDiscoveryPricingModel = (tool: any): string => {
+    const pricing = tool?.badges?.pricing ?? tool?.pricingModel ?? tool?.costCategory ?? 'unknown';
+    return typeof pricing === 'string' && pricing.length > 0 ? pricing : 'unknown';
+  };
+
+  const randomFrom = <T>(values: T[]): T => values[Math.floor(Math.random() * values.length)];
+
+  const mapStoredDiscoveredTool = async (tool: DiscoveredTool): Promise<DiscoveryToolSummary> => {
+    const metrics: ToolPopularityMetric | null = (await storage.getLatestToolPopularityMetric(tool.id).catch(() => null)) ?? null;
+
+    const toNumber = (value: unknown): number | undefined => {
+      if (value === null || value === undefined) return undefined;
+      const numeric = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(numeric) ? numeric : undefined;
+    };
+
+    const source: DiscoveryToolSource = {
+      name: tool.name,
+      description: tool.description ?? null,
+      category: tool.category,
+      subCategory: tool.subCategory ?? null,
+      sourceType: tool.sourceType,
+      sourceId: tool.sourceId,
+      sourceUrl: tool.sourceUrl ?? null,
+      repositoryUrl: tool.repositoryUrl ?? null,
+      documentationUrl: tool.documentationUrl ?? null,
+      homepageUrl: tool.homepageUrl ?? null,
+      languages: tool.languages ?? [],
+      frameworks: tool.frameworks ?? [],
+      tags: tool.tags ?? [],
+      keywords: tool.keywords ?? [],
+      pricingModel: tool.pricingModel ?? undefined,
+      costCategory: tool.costCategory ?? undefined,
+      estimatedMonthlyCost: toNumber(tool.estimatedMonthlyCost) ?? null,
+      difficultyLevel: tool.difficultyLevel ?? undefined,
+      popularityScore: toNumber(tool.popularityScore) ?? 0,
+      trendingScore: toNumber(tool.trendingScore) ?? 0,
+      qualityScore: toNumber(tool.qualityScore) ?? 0,
+      githubStars: tool.githubStars ?? null,
+      githubForks: tool.githubForks ?? null,
+      npmWeeklyDownloads: tool.npmWeeklyDownloads ?? null,
+      dockerPulls: tool.dockerPulls ?? null,
+      packageDownloads: tool.packageDownloads ?? null,
+      version: tool.version ?? undefined,
+      license: tool.license ?? undefined,
+      discoveredAt: tool.discoveredAt ?? undefined,
+      lastUpdated: tool.lastUpdated ?? undefined,
+      lastScanned: tool.lastScanned ?? undefined,
+      metrics: metrics ?? null,
+      evaluation: null,
+    };
+
+    return mapToDiscoveryToolSummary(source);
+  };
+
+  const getDiscoveryMonthlyCost = (tool: any): number => {
+    const value =
+      tool?.metrics?.estimatedMonthlyCost ??
+      tool?.estimatedMonthlyCost ??
+      null;
+    if (value !== null && value !== undefined) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) {
+        return numeric;
+      }
+    }
+
+    switch (getDiscoveryPricingModel(tool)) {
+      case 'free':
+        return 0;
+      case 'freemium':
+        return 25;
+      case 'paid':
+        return 75;
+      case 'enterprise':
+        return 150;
+      default:
+        return 100;
+    }
+  };
 
   // Security middleware for AI endpoints to prevent abuse
   const aiEndpointSecurity = (req: any, res: any, next: any) => {
@@ -2410,7 +2517,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (filters.pricingModel) {
         filteredResults = filteredResults.filter(tool =>
-          tool.pricingModel === filters.pricingModel
+          getDiscoveryPricingModel(tool) === filters.pricingModel
         );
       }
 
@@ -2823,7 +2930,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const category = userTools.find(ut => ut.tool.name === toolName)?.tool.category || 'general';
           return {
             currentTool: toolName,
-            alternatives: await discoveryEngine.getToolAlternatives(toolName, category, 3)
+            alternatives: (await discoveryEngine.getToolAlternatives(toolName, category, 3)).map(mapToDiscoveryToolSummary)
           };
         })
       );
@@ -2836,13 +2943,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           alternatives: alternatives.filter(alt => alt.alternatives.length > 0),
           stackInsights: {
             modernizationOpportunities: relevantTrending.filter(tool => 
-              tool.popularityScore > 0.7 && !currentStack.includes(tool.name)
+              getDiscoveryPopularityScore(tool) >= 70 && !currentStack.includes(tool.name)
             ).length,
-            emergingTechnologies: relevantTrending.filter(tool => 
-              new Date(tool.lastUpdated) > new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
-            ).length,
+            emergingTechnologies: relevantTrending.filter(tool => {
+              const lastUpdated = getDiscoveryLastUpdatedDate(tool);
+              if (!lastUpdated) {
+                return false;
+              }
+              return lastUpdated > new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+            }).length,
             costOptimizationPotential: alternatives.reduce((total, alt) => 
-              total + alt.alternatives.filter(a => a.pricingModel === 'free').length, 0
+              total + alt.alternatives.filter(a => getDiscoveryPricingModel(a) === 'free').length, 0
             )
           }
         },
@@ -2875,36 +2986,95 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const userTools = await storage.getUserTools(req.user!.id);
       const currentCost = userTools.reduce((sum, ut) => sum + parseFloat(ut.monthlyCost || "0"), 0);
-      
-      // Mock discovered tools data with estimated costs
-      const discoveredTools = discoveredToolIds.map(id => ({
-        id,
-        name: `Tool-${id}`,
-        estimatedMonthlyCost: Math.floor(Math.random() * 100) + 10, // $10-110/month
-        pricingModel: ['free', 'freemium', 'paid'][Math.floor(Math.random() * 3)],
-        category: ['frontend', 'backend', 'database', 'devops'][Math.floor(Math.random() * 4)],
-        integrationComplexity: ['low', 'medium', 'high'][Math.floor(Math.random() * 3)],
-        costSavings: Math.floor(Math.random() * 50), // Potential savings from replacing existing tools
-      }));
+      const baselineAverageCost = userTools.length > 0 ? currentCost / userTools.length : 50;
 
-      const totalEstimatedCost = discoveredTools.reduce((sum, tool) => 
-        sum + (tool.pricingModel === 'free' ? 0 : tool.estimatedMonthlyCost), 0
+      const createSyntheticSummary = (id: string): DiscoveryToolSummary => {
+        const pricing = randomFrom(['free', 'freemium', 'paid', 'enterprise']);
+        const category = randomFrom(['frontend', 'backend', 'database', 'devops', 'testing', 'monitoring']);
+        const difficulty = randomFrom(['beginner', 'intermediate', 'expert']);
+        const estimatedMonthlyCost = pricing === 'free' ? 0 : Math.floor(Math.random() * 90) + 15;
+
+        const syntheticSource: DiscoveryToolSource = {
+          name: `Tool-${id}`,
+          description: `Synthetic cost analysis candidate for ${id}`,
+          category,
+          sourceType: 'synthetic',
+          sourceId: id,
+          sourceUrl: null,
+          repositoryUrl: null,
+          documentationUrl: null,
+          homepageUrl: null,
+          languages: [],
+          frameworks: [],
+          tags: [],
+          keywords: [],
+          pricingModel: pricing,
+          costCategory: pricing === 'free' ? 'free' : 'paid',
+          estimatedMonthlyCost,
+          difficultyLevel: difficulty,
+          popularityScore: Math.round(Math.random() * 100),
+          trendingScore: Math.round(Math.random() * 100),
+          qualityScore: Math.round(Math.random() * 100),
+          githubStars: null,
+          githubForks: null,
+          npmWeeklyDownloads: null,
+          dockerPulls: null,
+          packageDownloads: null,
+          discoveredAt: new Date().toISOString(),
+          lastUpdated: new Date().toISOString(),
+          lastScanned: null,
+          metrics: null,
+          evaluation: null,
+        };
+
+        return mapToDiscoveryToolSummary(syntheticSource);
+      };
+
+      // TODO: replace synthetic fallback once storage exposes a bulk getDiscoveredToolsByIds helper.
+      const discoveredTools = await Promise.all(
+        discoveredToolIds.map(async (id) => {
+          try {
+            const existing = await storage.getDiscoveredTool(id);
+            if (existing) {
+              return mapStoredDiscoveredTool(existing);
+            }
+          } catch (error) {
+            console.warn(`Failed to load discovered tool ${id}:`, error);
+          }
+          return createSyntheticSummary(id);
+        })
       );
-      
-      const totalPotentialSavings = discoveredTools.reduce((sum, tool) => sum + tool.costSavings, 0);
+
+      const toolFinancials = discoveredTools.map(summary => {
+        const monthlyCost = getDiscoveryMonthlyCost(summary);
+        const pricingModel = getDiscoveryPricingModel(summary);
+        const potentialSavings = pricingModel === 'free'
+          ? Math.min(baselineAverageCost, monthlyCost || baselineAverageCost)
+          : Math.round(monthlyCost * 0.25);
+
+        return {
+          summary,
+          pricingModel,
+          monthlyCost,
+          potentialSavings,
+        };
+      });
+
+      const totalEstimatedCost = toolFinancials.reduce((sum, tool) => sum + tool.monthlyCost, 0);
+      const totalPotentialSavings = toolFinancials.reduce((sum, tool) => sum + tool.potentialSavings, 0);
       const netCostImpact = totalEstimatedCost - totalPotentialSavings;
-      
+
       const costImpactAnalysis = {
         currentMonthlyCost: currentCost,
         estimatedAdditionalCost: totalEstimatedCost,
         potentialSavings: totalPotentialSavings,
-        netCostImpact: netCostImpact,
+        netCostImpact,
         projectedMonthlyCost: currentCost + netCostImpact,
         costChangePercentage: currentCost > 0 ? (netCostImpact / currentCost) * 100 : 0,
-        tools: discoveredTools,
+        tools: toolFinancials,
         recommendations: {
-          budgetFriendly: discoveredTools.filter(t => t.pricingModel === 'free' || t.estimatedMonthlyCost < 25),
-          highROI: discoveredTools.filter(t => t.costSavings > t.estimatedMonthlyCost),
+          budgetFriendly: toolFinancials.filter(t => t.monthlyCost <= 25),
+          highROI: toolFinancials.filter(t => t.potentialSavings >= t.monthlyCost * 0.3),
           riskLevel: netCostImpact > currentCost * 0.5 ? 'high' : netCostImpact > currentCost * 0.2 ? 'medium' : 'low'
         }
       };
@@ -2939,15 +3109,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         discoveryEngine.getStackCompatibleTools(currentStack, 'devops', 3),
       ]);
 
-      const modernAlternatives = optimizationSuggestions.flat().filter(tool => 
-        !currentStack.includes(tool.name) && tool.popularityScore > 0.6
-      );
+      const modernAlternatives = optimizationSuggestions
+        .flat()
+        .map(tool => (tool && typeof tool === 'object' && 'provenance' in tool ? tool : mapToDiscoveryToolSummary(tool)))
+        .filter(tool =>
+          !currentStack.includes(tool.name) && getDiscoveryPopularityScore(tool) >= 60
+        );
 
       // Cost optimization opportunities
       const costOptimizations = userTools.map(ut => {
         const currentCost = parseFloat(ut.monthlyCost || "0");
         const freeAlternatives = modernAlternatives.filter(alt => 
-          alt.category === ut.tool.category && alt.pricingModel === 'free'
+          alt.category === ut.tool.category && getDiscoveryPricingModel(alt) === 'free'
         );
         
         return {
@@ -2980,10 +3153,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           modernAlternatives: modernAlternatives.slice(0, 8),
           costOptimizations,
           maintenanceAlerts,
-          trendingUpgrades: modernAlternatives.filter(alt => 
-            alt.popularityScore > 0.8 && 
-            new Date(alt.lastUpdated) > new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
-          ).slice(0, 4)
+          trendingUpgrades: modernAlternatives.filter(alt => {
+            const lastUpdated = getDiscoveryLastUpdatedDate(alt);
+            if (!lastUpdated) {
+              return false;
+            }
+            return (
+              getDiscoveryPopularityScore(alt) >= 80 &&
+              lastUpdated > new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
+            );
+          }).slice(0, 4)
         },
         summary: {
           totalOptimizationOpportunities: costOptimizations.length + maintenanceAlerts.length + modernAlternatives.length,
@@ -3041,12 +3220,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       allRecommendations.forEach(tool => {
-        const estimatedCost = tool.pricingModel === 'free' ? 0 : 
-                             tool.pricingModel === 'freemium' ? 25 :
-                             tool.pricingModel === 'paid' ? 75 : 150;
-        
-        const toolWithCost = { ...tool, estimatedCost };
-        
+        const pricingModel = getDiscoveryPricingModel(tool);
+        const estimatedCost = getDiscoveryMonthlyCost(tool);
+        const toolWithCost = { ...tool, pricingModel, estimatedCost };
+
         if (estimatedCost === 0) {
           budgetPlan.immediate.push(toolWithCost);
         } else if (estimatedCost <= availableBudget * 0.3) {
@@ -3096,9 +3273,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         insights: {
           freeToolsAvailable: budgetPlan.immediate.length,
-          averageToolCost: allRecommendations.length > 0 ? 
-            allRecommendations.reduce((sum, t) => sum + (t.pricingModel === 'free' ? 0 : 
-              t.pricingModel === 'freemium' ? 25 : t.pricingModel === 'paid' ? 75 : 150), 0) / allRecommendations.length : 0,
+          averageToolCost: allRecommendations.length > 0 ?
+            allRecommendations.reduce((sum, t) => sum + getDiscoveryMonthlyCost(t), 0) / allRecommendations.length : 0,
           budgetConstraints: availableBudget < 50 ? "tight" : availableBudget < 200 ? "moderate" : "comfortable"
         }
       };
@@ -4030,6 +4206,7 @@ async function importToolsFromCSV() {
     console.error("Error importing tools from CSV:", error);
   }
 }
+
 
 
 

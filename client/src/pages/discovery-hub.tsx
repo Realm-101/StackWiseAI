@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { 
   Search, 
   TrendingUp, 
@@ -32,6 +33,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { 
   DiscoveryToolSummary, 
+  DiscoverySourceStatus, 
   DiscoverySearchRequest, 
   DiscoveryTrendingRequest,
   TrendingToolsResponse,
@@ -73,6 +75,59 @@ const pricingColors = {
   enterprise: "bg-gray-100 text-gray-800",
   unknown: "bg-gray-100 text-gray-800",
 };
+
+function SourceStatusBanner({ statuses }: { statuses: DiscoverySourceStatus[] }) {
+  if (!statuses || statuses.length === 0) {
+    return null;
+  }
+
+  const badgeClass = (status: DiscoverySourceStatus['status']) => {
+    switch (status) {
+      case 'ok':
+        return 'bg-emerald-100 text-emerald-800';
+      case 'degraded':
+        return 'bg-amber-100 text-amber-800';
+      case 'unavailable':
+        return 'bg-red-100 text-red-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const impacted = statuses.filter(status => status.status !== 'ok');
+  const variant = impacted.length > 0 ? 'destructive' : 'default';
+
+  return (
+    <Alert variant={variant} className="space-y-3">
+      <AlertTitle>
+        {impacted.length > 0
+          ? 'Some discovery sources are degraded'
+          : 'All discovery sources are operating normally'}
+      </AlertTitle>
+      <AlertDescription className="flex flex-wrap gap-2">
+        {statuses.map(status => (
+          <Badge
+            key={status.source}
+            variant="secondary"
+            className={badgeClass(status.status)}
+          >
+            {status.source}: {status.status}
+          </Badge>
+        ))}
+      </AlertDescription>
+      {impacted.map(status => (
+        <AlertDescription
+          key={`${status.source}-message`}
+          className="text-sm text-muted-foreground"
+        >
+          {status.message
+            ? `${status.source}: ${status.message}`
+            : `${status.source}: temporarily unavailable, retrying soon.`}
+        </AlertDescription>
+      ))}
+    </Alert>
+  );
+}
 
 interface ToolDiscoveryCardProps {
   tool: DiscoveryToolSummary;
@@ -433,6 +488,7 @@ export default function DiscoveryHub() {
 
             {/* Trending Tools Tab */}
             <TabsContent value="trending" className="space-y-6">
+              <SourceStatusBanner statuses={trendingData?.sourceStatuses ?? []} />
               {/* Category Quick Filters */}
               <Card>
                 <CardContent className="p-6">
@@ -508,6 +564,7 @@ export default function DiscoveryHub() {
 
             {/* Search & Filter Tab */}
             <TabsContent value="search" className="space-y-6">
+              <SourceStatusBanner statuses={searchData?.sourceStatuses ?? []} />
               {/* Advanced Search and Filters */}
               <Card>
                 <CardContent className="p-6 space-y-4">
@@ -628,6 +685,7 @@ export default function DiscoveryHub() {
     </div>
   );
 }
+
 
 
 

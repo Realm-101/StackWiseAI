@@ -6,6 +6,12 @@ interface PopularityChartProps {
   userTools: UserToolWithTool[];
 }
 
+const getToolPopularityScore = (tool: UserToolWithTool['tool']): number => {
+  const raw = tool?.metrics?.popularity ?? tool?.popularityScore ?? tool?.popularity?.score ?? null;
+  const numeric = typeof raw === 'number' ? raw : raw !== null && raw !== undefined ? parseFloat(raw) : NaN;
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
 export function PopularityChart({ userTools }: PopularityChartProps) {
   const chartRef = useRef<HTMLCanvasElement>(null);
   const chartInstance = useRef<Chart | null>(null);
@@ -20,23 +26,23 @@ export function PopularityChart({ userTools }: PopularityChartProps) {
 
     // Categorize tools by popularity score
     const popularityBuckets = {
-      "High (9+)": 0,
-      "Medium (7-9)": 0,
-      "Growing (5-7)": 0,
-      "Early (<5)": 0,
+      "High (80-100)": 0,
+      "Rising (60-79)": 0,
+      "Steady (40-59)": 0,
+      "Early (<40)": 0,
     };
 
     userTools.forEach((item) => {
-      const score = parseFloat(item.tool.popularityScore || "0");
-      
-      if (score >= 9) {
-        popularityBuckets["High (9+)"]++;
-      } else if (score >= 7) {
-        popularityBuckets["Medium (7-9)"]++;
-      } else if (score >= 5) {
-        popularityBuckets["Growing (5-7)"]++;
+      const score = getToolPopularityScore(item.tool);
+
+      if (score >= 80) {
+        popularityBuckets["High (80-100)"]++;
+      } else if (score >= 60) {
+        popularityBuckets["Rising (60-79)"]++;
+      } else if (score >= 40) {
+        popularityBuckets["Steady (40-59)"]++;
       } else {
-        popularityBuckets["Early (<5)"]++;
+        popularityBuckets["Early (<40)"]++;
       }
     });
 

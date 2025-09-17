@@ -53,6 +53,18 @@ const getPriorityColor = (priority: string) => {
   }
 };
 
+const getToolPopularityDisplay = (tool: any): string => {
+  const raw = tool?.metrics?.popularity ?? tool?.popularityScore ?? tool?.popularity?.score ?? null;
+  const numeric = typeof raw === 'number' ? raw : raw !== null && raw !== undefined ? parseFloat(raw) : NaN;
+  return Number.isFinite(numeric) ? numeric.toFixed(1) : 'N/A';
+};
+
+const getToolQualityDisplay = (tool: any): string => {
+  const raw = tool?.metrics?.quality ?? tool?.qualityScore ?? tool?.maturityScore ?? null;
+  const numeric = typeof raw === 'number' ? raw : raw !== null && raw !== undefined ? parseFloat(raw) : NaN;
+  return Number.isFinite(numeric) ? numeric.toFixed(1) : 'N/A';
+};
+
 const getPriorityLabel = (priority: string) => {
   switch (priority) {
     case 'critical':
@@ -312,10 +324,10 @@ export default function StackIntelligence() {
                                   </p>
                                   <div className="flex items-center gap-2 mt-2">
                                     <Badge variant="outline">
-                                      Pop: {userTool.tool.popularityScore || 'N/A'}
+                                      Pop: {getToolPopularityDisplay(userTool.tool)}
                                     </Badge>
                                     <Badge variant="outline">
-                                      Mat: {userTool.tool.maturityScore || 'N/A'}
+                                      Mat: {getToolQualityDisplay(userTool.tool)}
                                     </Badge>
                                   </div>
                                 </div>
@@ -362,10 +374,10 @@ export default function StackIntelligence() {
                                   </p>
                                   <div className="flex items-center gap-2 mt-2">
                                     <Badge variant="outline">
-                                      Pop: {tool.popularityScore || 'N/A'}
+                                      Pop: {getToolPopularityDisplay(tool)}
                                     </Badge>
                                     <Badge variant="outline">
-                                      Mat: {tool.maturityScore || 'N/A'}
+                                      Mat: {getToolQualityDisplay(tool)}
                                     </Badge>
                                   </div>
                                   <Button size="sm" className="w-full mt-3" data-testid={`button-add-tool-${index}-${toolIndex}`}>

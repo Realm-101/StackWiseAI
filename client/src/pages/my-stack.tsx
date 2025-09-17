@@ -33,6 +33,17 @@ const getCategoryIcon = (category: string) => {
   }
 };
 
+const getToolPopularityScore = (tool: any): number => {
+  const raw = tool?.metrics?.popularity ?? tool?.popularityScore ?? tool?.popularity?.score ?? null;
+  const numeric = typeof raw === 'number' ? raw : raw !== null && raw !== undefined ? parseFloat(raw) : NaN;
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const getToolPopularityLabel = (tool: any): string => {
+  const score = getToolPopularityScore(tool);
+  return score > 0 ? score.toFixed(1) : 'N/A';
+};
+
 const getCategoryColor = (category: string) => {
   switch (category) {
     case "AI Coding Tools":
@@ -470,6 +481,8 @@ export default function MyStack() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
                 {userTools.map((item) => {
                   const IconComponent = getCategoryIcon(item.tool.category);
+                  const popularityScore = getToolPopularityScore(item.tool);
+                  const popularityLabel = getToolPopularityLabel(item.tool);
                   const iconColorClass = getCategoryColor(item.tool.category);
                   
                   return (
@@ -605,18 +618,18 @@ export default function MyStack() {
                               {!item.isActive && <span className="text-xs ml-1">(inactive)</span>}
                             </span>
                           </div>
-                          {item.tool.popularityScore && (
+                          {popularityScore > 0 && (
                             <div className="flex justify-between">
                               <span className="text-sm text-muted-foreground">Popularity</span>
                               <div className="flex items-center">
                                 <div className="w-16 bg-muted rounded-full h-2 mr-2">
-                                  <div 
+                                  <div
                                     className="bg-secondary h-2 rounded-full"
-                                    style={{ width: `${(parseFloat(item.tool.popularityScore) / 10) * 100}%` }}
+                                    style={{ width: `${Math.min(popularityScore, 100)}%` }}
                                   ></div>
                                 </div>
                                 <span className="text-xs text-muted-foreground">
-                                  {item.tool.popularityScore}
+                                  {popularityLabel}
                                 </span>
                               </div>
                             </div>

@@ -10,6 +10,17 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Tool } from "@shared/schema";
 
+const getToolPopularityScore = (tool: any): number => {
+  const raw = tool?.metrics?.popularity ?? tool?.popularityScore ?? tool?.popularity?.score ?? null;
+  const numeric = typeof raw === 'number' ? raw : raw !== null && raw !== undefined ? parseFloat(raw) : NaN;
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const getToolPopularityLabel = (tool: any): string => {
+  const score = getToolPopularityScore(tool);
+  return score > 0 ? score.toFixed(1) : 'N/A';
+};
+
 const categories = [
   { value: "all", label: "All" },
   { value: "AI Coding Tools", label: "AI Tools" },
@@ -198,6 +209,8 @@ export default function DiscoverTools() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredTools.map((tool) => {
                 const IconComponent = getCategoryIcon(tool.category);
+                const popularityScore = getToolPopularityScore(tool);
+                const popularityLabel = getToolPopularityLabel(tool);
                 const iconColorClass = getCategoryColor(tool.category);
                 const isAdded = userToolIds.has(tool.id);
                 const frameworks = tool.frameworks ? tool.frameworks.split(";").slice(0, 3) : [];
@@ -249,18 +262,18 @@ export default function DiscoverTools() {
                             {tool.pricing || "Contact for pricing"}
                           </span>
                         </div>
-                        {tool.popularityScore && (
+                        {popularityScore > 0 && (
                           <div className="flex justify-between text-sm">
                             <span className="text-muted-foreground">Popularity</span>
                             <div className="flex items-center">
                               <div className="w-16 bg-muted rounded-full h-2 mr-2">
-                                <div 
+                                <div
                                   className="bg-secondary h-2 rounded-full"
-                                  style={{ width: `${(parseFloat(tool.popularityScore) / 10) * 100}%` }}
+                                  style={{ width: `${Math.min(popularityScore, 100)}%` }}
                                 ></div>
                               </div>
                               <span className="text-xs text-muted-foreground">
-                                {tool.popularityScore}
+                                {popularityLabel}
                               </span>
                             </div>
                           </div>
