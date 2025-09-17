@@ -185,7 +185,7 @@ export function TaskCard({
             {onSelect && (
               <Checkbox
                 checked={isSelected}
-                onCheckedChange={onSelect}
+                onCheckedChange={(checked) => onSelect?.(checked === true)}
                 className="mt-1"
                 data-testid={`checkbox-select-${task.id}`}
               />
@@ -272,7 +272,7 @@ export function TaskCard({
                     form={editForm} 
                     setForm={setEditForm} 
                     onSave={handleSaveEdit}
-                    isLoading={updateTaskMutation.isLoading}
+                    isLoading={updateTaskMutation.isPending}
                   />
                 </DialogContent>
               </Dialog>
@@ -281,7 +281,7 @@ export function TaskCard({
                 variant="ghost" 
                 size="sm" 
                 onClick={handleDelete}
-                disabled={deleteTaskMutation.isLoading}
+                disabled={deleteTaskMutation.isPending}
                 data-testid={`button-delete-${task.id}`}
               >
                 <Trash2 className="w-4 h-4" />
@@ -306,12 +306,9 @@ export function TaskCard({
             {onSelect && (
               <Checkbox
                 checked={isSelected}
-                onCheckedChange={(e) => {
-                  e.stopPropagation();
-                  onSelect?.(!!e);
-                }}
+                onCheckedChange={(checked) => onSelect?.(checked === true)}
                 data-testid={`checkbox-select-${task.id}`}
-                onClick={(e) => e.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
               />
             )}
             <Badge className={categoryColors[task.category as keyof typeof categoryColors] || "bg-gray-100"}>
@@ -395,7 +392,7 @@ export function TaskCard({
                   form={editForm} 
                   setForm={setEditForm} 
                   onSave={handleSaveEdit}
-                  isLoading={updateTaskMutation.isLoading}
+                  isLoading={updateTaskMutation.isPending}
                 />
               </DialogContent>
             </Dialog>
@@ -407,7 +404,7 @@ export function TaskCard({
                 e.stopPropagation();
                 handleDelete();
               }}
-              disabled={deleteTaskMutation.isLoading}
+              disabled={deleteTaskMutation.isPending}
               data-testid={`button-delete-${task.id}`}
             >
               <Trash2 className="w-4 h-4" />

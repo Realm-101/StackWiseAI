@@ -3,7 +3,7 @@
  * Handles team allocation, workload balancing, and capacity planning
  */
 
-import { ProjectResource, ProjectTask, Project, User } from '@/shared/schema';
+import { ProjectResource, ProjectTask, Project, User } from '@shared/schema';
 
 export interface ResourceAllocation {
   resourceId: string;

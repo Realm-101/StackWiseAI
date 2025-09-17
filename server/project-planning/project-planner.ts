@@ -3,7 +3,7 @@
  * Coordinates all planning engines and provides unified project planning interface
  */
 
-import { Project, ProjectTask, ProjectResource, ProjectBudget, ProjectPhase, ProjectMilestone } from '@/shared/schema';
+import { Project, ProjectTask, ProjectResource, ProjectBudget, ProjectPhase, ProjectMilestone } from '@shared/schema';
 import { timelineEngine, TimelineCalculationResult } from './timeline-engine';
 import { resourceOptimizer, ResourceOptimizationResult } from './resource-optimizer';
 import { budgetCalculator, BudgetEstimation, BudgetForecast } from './budget-calculator';

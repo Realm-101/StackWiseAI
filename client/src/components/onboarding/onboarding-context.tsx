@@ -26,9 +26,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
 
   // Fetch onboarding status
-  const { data: onboardingStatus, isLoading } = useQuery<OnboardingStatus>({
+  const { data: onboardingStatusData, isLoading } = useQuery<OnboardingStatus>({
     queryKey: ["/api/onboarding/status"],
   });
+
+  const onboardingStatus = onboardingStatusData ?? null;
 
   // Update profile mutation
   const profileMutation = useMutation({

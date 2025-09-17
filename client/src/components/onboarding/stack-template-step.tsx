@@ -54,6 +54,9 @@ export function StackTemplateStep({ onNext, onBack }: StackTemplateStepProps) {
     setCustomStart(false);
   };
 
+  const isTemplateRecommended = (template: OnboardingStackTemplate) =>
+    template.tags?.includes("recommended");
+
   const handleCustomStart = () => {
     setCustomStart(true);
     setSelectedTemplate(null);
@@ -165,7 +168,7 @@ export function StackTemplateStep({ onNext, onBack }: StackTemplateStepProps) {
                   <div className="flex-1">
                     <CardTitle className="text-lg flex items-center gap-2">
                       {template.name}
-                      {template.recommended && (
+                      {isTemplateRecommended(template) && (
                         <Star className="h-4 w-4 text-yellow-500 fill-current" />
                       )}
                     </CardTitle>
@@ -210,7 +213,7 @@ export function StackTemplateStep({ onNext, onBack }: StackTemplateStepProps) {
                   {/* Tools Count */}
                   <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400">
                     <span>{template.tools.length} tools included</span>
-                    {template.recommended && (
+                    {isTemplateRecommended(template) && (
                       <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 text-xs">
                         Recommended
                       </Badge>

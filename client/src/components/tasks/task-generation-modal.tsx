@@ -419,13 +419,13 @@ export function TaskGenerationModal({ isOpen, onClose, idea, onTasksGenerated }:
                 Our AI is analyzing your business idea and creating detailed project tasks...
               </p>
               
-              <Progress value={generateTasksMutation.isLoading ? 50 : 100} className="w-full mb-4" />
+              <Progress value={generateTasksMutation.isPending ? 50 : 100} className="w-full mb-4" />
               
               <div className="text-sm text-gray-500 space-y-1">
                 <p>✓ Analyzing business requirements</p>
                 <p>✓ Reviewing your tech stack</p>
-                <p className={generateTasksMutation.isLoading ? "text-blue-500" : "text-green-500"}>
-                  {generateTasksMutation.isLoading ? "→ Generating tasks..." : "✓ Tasks generated successfully!"}
+                <p className={generateTasksMutation.isPending ? "text-blue-500" : "text-green-500"}>
+                  {generateTasksMutation.isPending ? "→ Generating tasks..." : "✓ Tasks generated successfully!"}
                 </p>
               </div>
             </div>
@@ -496,7 +496,7 @@ export function TaskGenerationModal({ isOpen, onClose, idea, onTasksGenerated }:
           <Button
             variant="outline"
             onClick={handleBack}
-            disabled={currentStep === 0 || generateTasksMutation.isLoading}
+            disabled={currentStep === 0 || generateTasksMutation.isPending}
             data-testid="button-back"
           >
             Back
@@ -506,7 +506,7 @@ export function TaskGenerationModal({ isOpen, onClose, idea, onTasksGenerated }:
             <Button
               variant="outline"
               onClick={onClose}
-              disabled={generateTasksMutation.isLoading}
+              disabled={generateTasksMutation.isPending}
               data-testid="button-cancel"
             >
               Cancel
@@ -524,10 +524,10 @@ export function TaskGenerationModal({ isOpen, onClose, idea, onTasksGenerated }:
             ) : currentStep === 2 ? (
               <Button
                 onClick={handleGenerate}
-                disabled={!canProceed() || generateTasksMutation.isLoading}
+                disabled={!canProceed() || generateTasksMutation.isPending}
                 data-testid="button-generate"
               >
-                {generateTasksMutation.isLoading ? (
+                {generateTasksMutation.isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Generating...

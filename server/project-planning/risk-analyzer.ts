@@ -3,7 +3,7 @@
  * Identifies, quantifies, and provides mitigation strategies for project risks
  */
 
-import { Project, ProjectTask, ProjectResource, ProjectBudget } from '@/shared/schema';
+import { Project, ProjectTask, ProjectResource, ProjectBudget } from '@shared/schema';
 
 export interface ProjectRisk {
   id: string;

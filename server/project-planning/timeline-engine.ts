@@ -3,7 +3,7 @@
  * Implements sophisticated algorithms for project timeline optimization
  */
 
-import { Project, ProjectTimeline, ProjectPhase, ProjectMilestone, TaskDependency, ProjectTask } from '@/shared/schema';
+import { Project, ProjectTimeline, ProjectPhase, ProjectMilestone, TaskDependency, ProjectTask } from '@shared/schema';
 
 export interface TimelineCalculationResult {
   startDate: Date;

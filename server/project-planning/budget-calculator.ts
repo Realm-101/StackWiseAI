@@ -3,7 +3,7 @@
  * Handles budget planning, variance analysis, and financial optimization
  */
 
-import { ProjectBudget, Project, ProjectResource, ProjectTask } from '@/shared/schema';
+import { ProjectBudget, Project, ProjectResource, ProjectTask } from '@shared/schema';
 
 export interface BudgetEstimation {
   projectId: string;
