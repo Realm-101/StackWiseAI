@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Search, Plus, Code, Database, Palette, Server, CreditCard, Wrench } from "lucide-react";
+import { Search, Plus, Code, Database, Palette, Server, CreditCard, Wrench, Shield, Brain } from "lucide-react";
 import Navigation from "@/components/layout/navigation";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -21,49 +21,107 @@ const getToolPopularityLabel = (tool: any): string => {
   return score > 0 ? score.toFixed(1) : 'N/A';
 };
 
+const SourceStatusBanner = ({ statuses }: { statuses: { source: string; status: string; message?: string | null }[] }) => {
+  if (!statuses || statuses.length === 0) {
+    return null;
+  }
+
+  const badgeClass = (status: string) => {
+    switch (status) {
+      case 'ok':
+        return 'bg-emerald-100 text-emerald-800';
+      case 'degraded':
+        return 'bg-amber-100 text-amber-800';
+      case 'unavailable':
+        return 'bg-red-100 text-red-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const impacted = statuses.filter(status => status.status !== 'ok');
+  const bannerClass = impacted.length > 0
+    ? 'border border-destructive/40 bg-destructive/10 text-destructive-foreground rounded-lg p-4 space-y-2'
+    : 'border border-muted bg-muted text-muted-foreground rounded-lg p-4 space-y-2';
+
+  return (
+    <div className={bannerClass}>
+      <div className="font-medium">
+        {impacted.length > 0
+          ? 'Some discovery sources are degraded'
+          : 'All discovery sources are operating normally'}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {statuses.map(status => (
+          <Badge key={status.source} variant="secondary" className={badgeClass(status.status)}>
+            {status.source}: {status.status}
+          </Badge>
+        ))}
+      </div>
+      {impacted.map(status => (
+        <p key={`${status.source}-message`} className="text-sm">
+          {status.message ?? `${status.source}: temporarily unavailable, retrying soon.`}
+        </p>
+      ))}
+    </div>
+  );
+};
+
 const categories = [
   { value: "all", label: "All" },
-  { value: "AI Coding Tools", label: "AI Tools" },
-  { value: "Frontend/Design", label: "Frontend" },
-  { value: "Backend/Database", label: "Backend" },
-  { value: "DevOps/Deployment", label: "DevOps" },
-  { value: "Payment Platforms", label: "Payments" },
-  { value: "IDE/Development", label: "IDE" },
+  { value: "frontend", label: "Frontend" },
+  { value: "backend", label: "Backend" },
+  { value: "database", label: "Database" },
+  { value: "devops", label: "DevOps" },
+  { value: "testing", label: "Testing" },
+  { value: "monitoring", label: "Monitoring" },
+  { value: "security", label: "Security" },
+  { value: "machine-learning", label: "AI/ML" },
 ];
 
 const getCategoryIcon = (category: string) => {
   switch (category) {
-    case "AI Coding Tools":
-    case "IDE/Development":
-      return Code;
-    case "Frontend/Design":
+    case "frontend":
       return Palette;
-    case "Backend/Database":
-      return Database;
-    case "DevOps/Deployment":
+    case "backend":
       return Server;
-    case "Payment Platforms":
-      return CreditCard;
-    default:
+    case "database":
+      return Database;
+    case "devops":
       return Wrench;
+    case "testing":
+      return Search;
+    case "monitoring":
+      return CreditCard;
+    case "security":
+      return Shield;
+    case "machine-learning":
+      return Brain;
+    default:
+      return Code;
   }
 };
 
 const getCategoryColor = (category: string) => {
   switch (category) {
-    case "AI Coding Tools":
-    case "IDE/Development":
-      return "text-primary bg-primary/10";
-    case "Frontend/Design":
+    case "frontend":
       return "text-secondary bg-secondary/10";
-    case "Backend/Database":
+    case "backend":
       return "text-accent bg-accent/10";
-    case "DevOps/Deployment":
+    case "database":
       return "text-blue-600 bg-blue-100";
-    case "Payment Platforms":
+    case "devops":
       return "text-orange-600 bg-orange-100";
+    case "testing":
+      return "text-purple-600 bg-purple-100";
+    case "monitoring":
+      return "text-green-600 bg-green-100";
+    case "security":
+      return "text-red-600 bg-red-100";
+    case "machine-learning":
+      return "text-amber-600 bg-amber-100";
     default:
-      return "text-gray-600 bg-gray-100";
+      return "text-primary bg-primary/10";
   }
 };
 
@@ -83,11 +141,9 @@ export default function DiscoverTools() {
   });
 
   const addToolMutation = useMutation({
-    mutationFn: async (toolId: string) => {
-      await apiRequest("POST", "/api/user-tools", {
-        toolId,
-        monthlyCost: "0",
-        quantity: 1,
+    mutationFn: async (tool: DiscoveryToolSummary) => {
+      await apiRequest("POST", `/api/discovery/tools/${encodeURIComponent(tool.id)}/add`, {
+        monthlyCost: String(tool.metrics.estimatedMonthlyCost ?? 0),
       });
     },
     onSuccess: () => {
@@ -123,18 +179,23 @@ export default function DiscoverTools() {
 
   // Filter tools based on search and category
   const filteredTools = tools.filter((tool) => {
-    const matchesSearch = tool.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         tool.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         tool.category.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesCategory = selectedCategory === "all" || tool.category === selectedCategory;
-    
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = query.length === 0 ||
+      tool.name.toLowerCase().includes(query) ||
+      (tool.description ?? '').toLowerCase().includes(query) ||
+      tool.category.toLowerCase().includes(query) ||
+      tool.tech.tags.some(tag => tag.toLowerCase().includes(query));
+
+    const matchesCategory = selectedCategory === 'all' || tool.category === selectedCategory;
+
     return matchesSearch && matchesCategory;
   });
 
-  const handleAddTool = (toolId: string) => {
-    addToolMutation.mutate(toolId);
+  const handleAddTool = (tool: DiscoveryToolSummary) => {
+    addToolMutation.mutate(tool);
   };
+
+  const sourceStatuses = trendingData?.sourceStatuses ?? [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -148,7 +209,7 @@ export default function DiscoverTools() {
           </div>
 
           {/* Search and Filters */}
-          <Card className="mb-8">
+          <Card className="mb-4">
             <CardContent className="p-6">
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between space-y-4 lg:space-y-0 lg:space-x-6">
                 <div className="flex-1 max-w-md">
@@ -179,6 +240,10 @@ export default function DiscoverTools() {
               </div>
             </CardContent>
           </Card>
+
+          <div className="mb-8">
+            <SourceStatusBanner statuses={sourceStatuses} />
+          </div>
 
           {/* Tools Grid */}
           {isLoading ? (
@@ -220,8 +285,8 @@ export default function DiscoverTools() {
                 const popularityScore = getToolPopularityScore(tool);
                 const popularityLabel = getToolPopularityLabel(tool);
                 const iconColorClass = getCategoryColor(tool.category);
-                const isAdded = userToolIds.has(tool.id);
-                const frameworks = tool.frameworks ? tool.frameworks.split(";").slice(0, 3) : [];
+                const isAdded = userToolNames.has(tool.name.toLowerCase());
+                const frameworks = tool.tech.frameworks?.slice(0, 3) ?? [];
                 
                 return (
                   <Card key={tool.id} className="hover:shadow-md transition-all duration-200">
@@ -243,7 +308,7 @@ export default function DiscoverTools() {
                         <Button
                           size="sm"
                           disabled={isAdded || addToolMutation.isPending}
-                          onClick={() => handleAddTool(tool.id)}
+                          onClick={() => handleAddTool(tool)}
                           data-testid={`button-add-tool-${tool.id}`}
                         >
                           {isAdded ? (
@@ -267,7 +332,7 @@ export default function DiscoverTools() {
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Pricing</span>
                           <span className="font-medium text-foreground" data-testid={`text-pricing-${tool.id}`}>
-                            {tool.pricing || "Contact for pricing"}
+                            {tool.badges.pricing}
                           </span>
                         </div>
                         {popularityScore > 0 && (
