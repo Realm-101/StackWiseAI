@@ -379,6 +379,7 @@ export interface IStorage {
   updateDiscoveredTool(id: string, updates: Partial<InsertDiscoveredTool>): Promise<DiscoveredTool | undefined>;
   getDiscoveredTool(id: string): Promise<DiscoveredTool | undefined>;
   getDiscoveredToolBySourceId(sourceType: string, sourceId: string): Promise<DiscoveredTool | undefined>;
+  getDiscoveredToolsByIds(ids: string[]): Promise<DiscoveredTool[]>;
   getAllDiscoveredTools(filters?: {
     category?: string;
     sourceType?: string;
@@ -892,6 +893,32 @@ export class DatabaseStorage implements IStorage {
       ...row.user_tools,
       tool: row.tools
     }));
+  }
+
+  // Discovery tool operations
+  async getDiscoveredToolsByIds(ids: string[]): Promise<DiscoveredTool[]> {
+    if (!ids.length) {
+      return [];
+    }
+
+    const records = await db
+      .select()
+      .from(discoveredTools)
+      .where(inArray(discoveredTools.id, ids));
+
+    if (records.length === 0) {
+      return [];
+    }
+
+    const recordMap = new Map(records.map(record => [record.id, record]));
+    const ordered: DiscoveredTool[] = [];
+    for (const id of ids) {
+      const record = recordMap.get(id);
+      if (record) {
+        ordered.push(record);
+      }
+    }
+    return ordered;
   }
 
   // Saved ideas operations

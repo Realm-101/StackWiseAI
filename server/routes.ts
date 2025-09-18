@@ -3030,16 +3030,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return mapToDiscoveryToolSummary(syntheticSource);
       };
 
-      // TODO: replace synthetic fallback once storage exposes a bulk getDiscoveredToolsByIds helper.
+      const storedDiscoveredTools = await storage.getDiscoveredToolsByIds(discoveredToolIds);
+      const storedDiscoveredMap = new Map(storedDiscoveredTools.map(tool => [tool.id, tool]));
+
       const discoveredTools = await Promise.all(
         discoveredToolIds.map(async (id) => {
-          try {
-            const existing = await storage.getDiscoveredTool(id);
-            if (existing) {
-              return mapStoredDiscoveredTool(existing);
+          const stored = storedDiscoveredMap.get(id);
+          if (stored) {
+            try {
+              return await mapStoredDiscoveredTool(stored);
+            } catch (error) {
+              console.warn(`Failed to map stored discovered tool ${id}:`, error);
             }
-          } catch (error) {
-            console.warn(`Failed to load discovered tool ${id}:`, error);
           }
           return createSyntheticSummary(id);
         })

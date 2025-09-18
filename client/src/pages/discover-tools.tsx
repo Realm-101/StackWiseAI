@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Search, Plus, Code, Database, Palette, Server, CreditCard, Wrench, Shield, Brain } from "lucide-react";
 import Navigation from "@/components/layout/navigation";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { DiscoveryToolSummary, TrendingToolsResponse } from "@shared/schema";
+import type { DiscoveryCategory, DiscoveryToolSummary, TrendingToolsResponse } from "@shared/schema";
 
 const getToolPopularityScore = (tool: any): number => {
   const raw = tool?.metrics?.popularity ?? tool?.popularityScore ?? tool?.popularity?.score ?? null;
@@ -20,6 +21,23 @@ const getToolPopularityLabel = (tool: any): string => {
   const score = getToolPopularityScore(tool);
   return score > 0 ? score.toFixed(1) : 'N/A';
 };
+
+const formatLabel = (value: string) => value.replace(/[-_]/g, ' ').replace(/\w/g, char => char.toUpperCase());
+
+const formatSourceType = (sourceType: string) => formatLabel(sourceType);
+const formatPricingModel = (pricing: string) => formatLabel(pricing);
+
+const DEFAULT_CATEGORY_FILTERS = [
+  { value: 'all', label: 'All Tools' },
+  { value: 'frontend', label: 'Frontend' },
+  { value: 'backend', label: 'Backend' },
+  { value: 'database', label: 'Database' },
+  { value: 'devops', label: 'DevOps' },
+  { value: 'testing', label: 'Testing' },
+  { value: 'monitoring', label: 'Monitoring' },
+  { value: 'security', label: 'Security' },
+  { value: 'machine-learning', label: 'AI/ML' },
+];
 
 const SourceStatusBanner = ({ statuses }: { statuses: { source: string; status: string; message?: string | null }[] }) => {
   if (!statuses || statuses.length === 0) {
@@ -129,12 +147,74 @@ export default function DiscoverTools() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedSourceType, setSelectedSourceType] = useState("all");
+  const [selectedPricingModel, setSelectedPricingModel] = useState("all");
 
   const { data: trendingData, isLoading } = useQuery<TrendingToolsResponse>({
     queryKey: ["/api/discovery/trending", { timeframe: 'week', limit: 60 }],
   });
 
+  const { data: discoveryCategories = [] } = useQuery<DiscoveryCategory[]>({
+    queryKey: ["/api/discovery/categories"],
+  });
+
   const tools = trendingData?.items ?? [];
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    trendingData?.categories?.forEach(({ category, count }) => {
+      counts.set(category, count);
+    });
+    return counts;
+  }, [trendingData]);
+
+  const categoryFilters = useMemo(() => {
+    if (!discoveryCategories || discoveryCategories.length === 0) {
+      return DEFAULT_CATEGORY_FILTERS;
+    }
+
+    const seen = new Set<string>();
+    const unique: { value: string; label: string }[] = [];
+
+    discoveryCategories.forEach((cat: any) => {
+      const rawValue = (cat.id ?? cat.slug ?? cat.name ?? '').toString();
+      const value = rawValue.toLowerCase();
+      if (!value || seen.has(value)) {
+        return;
+      }
+      seen.add(value);
+      unique.push({ value, label: cat.name ?? formatLabel(value) });
+    });
+
+    return [{ value: 'all', label: 'All Tools' }, ...unique];
+  }, [discoveryCategories]);
+
+  useEffect(() => {
+    if (selectedCategory !== 'all' && !categoryFilters.some(filter => filter.value === selectedCategory)) {
+      setSelectedCategory('all');
+    }
+  }, [categoryFilters, selectedCategory]);
+
+  const availableSourceTypes = useMemo(() => {
+    const set = new Set<string>();
+    tools.forEach(tool => {
+      if (tool.provenance.sourceType) {
+        set.add(tool.provenance.sourceType);
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [tools]);
+
+  const availablePricingModels = useMemo(() => {
+    const set = new Set<string>();
+    tools.forEach(tool => {
+      const pricing = tool.badges.pricing;
+      if (pricing && pricing !== 'unknown') {
+        set.add(pricing);
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [tools]);
 
   const { data: userTools = [] } = useQuery({
     queryKey: ["/api/user-tools"],
@@ -143,7 +223,7 @@ export default function DiscoverTools() {
   const addToolMutation = useMutation({
     mutationFn: async (tool: DiscoveryToolSummary) => {
       await apiRequest("POST", `/api/discovery/tools/${encodeURIComponent(tool.id)}/add`, {
-        monthlyCost: String(tool.metrics.estimatedMonthlyCost ?? 0),
+        summary: tool,
       });
     },
     onSuccess: () => {
@@ -180,15 +260,18 @@ export default function DiscoverTools() {
   // Filter tools based on search and category
   const filteredTools = tools.filter((tool) => {
     const query = searchQuery.toLowerCase();
-    const matchesSearch = query.length === 0 ||
+    const matchesSearch =
+      query.length === 0 ||
       tool.name.toLowerCase().includes(query) ||
       (tool.description ?? '').toLowerCase().includes(query) ||
       tool.category.toLowerCase().includes(query) ||
       tool.tech.tags.some(tag => tag.toLowerCase().includes(query));
 
     const matchesCategory = selectedCategory === 'all' || tool.category === selectedCategory;
+    const matchesSourceType = selectedSourceType === 'all' || tool.provenance.sourceType === selectedSourceType;
+    const matchesPricingModel = selectedPricingModel === 'all' || tool.badges.pricing === selectedPricingModel;
 
-    return matchesSearch && matchesCategory;
+    return matchesSearch && matchesCategory && matchesSourceType && matchesPricingModel;
   });
 
   const handleAddTool = (tool: DiscoveryToolSummary) => {
@@ -225,17 +308,55 @@ export default function DiscoverTools() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {categories.map((category) => (
-                    <Button
-                      key={category.value}
-                      variant={selectedCategory === category.value ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setSelectedCategory(category.value)}
-                      data-testid={`button-filter-${category.value}`}
-                    >
-                      {category.label}
-                    </Button>
-                  ))}
+                  {categoryFilters.map((category) => {
+                    const count = category.value === 'all' ? tools.length : categoryCounts.get(category.value) ?? 0;
+                    return (
+                      <Button
+                        key={category.value}
+                        variant={selectedCategory === category.value ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setSelectedCategory(category.value)}
+                        data-testid={`button-filter-${category.value}`}
+                      >
+                        {category.label}
+                        {count > 0 && (
+                          <span className="ml-2 text-xs text-muted-foreground">{count}</span>
+                        )}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  {availableSourceTypes.length > 0 && (
+                    <Select value={selectedSourceType} onValueChange={setSelectedSourceType}>
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue placeholder="All sources" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All sources</SelectItem>
+                        {availableSourceTypes.map((source) => (
+                          <SelectItem key={source} value={source}>
+                            {formatSourceType(source)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {availablePricingModels.length > 0 && (
+                    <Select value={selectedPricingModel} onValueChange={setSelectedPricingModel}>
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue placeholder="All pricing" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All pricing</SelectItem>
+                        {availablePricingModels.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {formatPricingModel(model)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
               </div>
             </CardContent>
@@ -373,3 +494,4 @@ export default function DiscoverTools() {
     </div>
   );
 }
+
