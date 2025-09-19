@@ -419,6 +419,26 @@ export class DiscoveryEngine {
     };
   }
 
+  async getToolAlternatives(toolName: string, category: string, limit: number = 3): Promise<DiscoveryToolSummary[]> {
+    const categoryFilter = category ? [category] : undefined;
+    const { tools } = await this.discoverTrendingTools({ maxToolsPerSource: limit * 3 }, categoryFilter);
+    const lowerName = toolName.toLowerCase();
+    return tools
+      .filter(tool => tool.name.toLowerCase() !== lowerName)
+      .slice(0, limit)
+      .map(tool => mapToDiscoveryToolSummary(tool));
+  }
+
+  async getStackCompatibleTools(userTools: string[], targetCategory: string, limit: number = 5): Promise<DiscoveryToolSummary[]> {
+    const userToolSet = new Set(userTools.map(tool => tool.toLowerCase()));
+    const categoryFilter = targetCategory ? [targetCategory] : undefined;
+    const { tools } = await this.discoverTrendingTools({ maxToolsPerSource: limit * 4 }, categoryFilter);
+    return tools
+      .filter(tool => !userToolSet.has(tool.name.toLowerCase()))
+      .slice(0, limit)
+      .map(tool => mapToDiscoveryToolSummary(tool));
+  }
+
   /**
    * Enrich tools with additional metadata and scoring
    */

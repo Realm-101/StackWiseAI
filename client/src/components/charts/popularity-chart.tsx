@@ -7,9 +7,20 @@ interface PopularityChartProps {
 }
 
 const getToolPopularityScore = (tool: UserToolWithTool['tool']): number => {
-  const raw = tool?.metrics?.popularity ?? tool?.popularityScore ?? tool?.popularity?.score ?? null;
-  const numeric = typeof raw === 'number' ? raw : raw !== null && raw !== undefined ? parseFloat(raw) : NaN;
-  return Number.isFinite(numeric) ? numeric : 0;
+  const candidates: Array<string | number | null | undefined> = [
+    tool?.popularityScore,
+    tool?.maturityScore,
+  ];
+
+  for (const raw of candidates) {
+    if (raw === null || raw === undefined || raw === '') continue;
+    const numeric = typeof raw === 'number' ? raw : Number(raw);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+  }
+
+  return 0;
 };
 
 export function PopularityChart({ userTools }: PopularityChartProps) {

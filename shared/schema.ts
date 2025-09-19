@@ -1988,6 +1988,23 @@ export type InsertUserDiscoveryPreference = typeof userDiscoveryPreferences.$inf
 export type DiscoveredToolEvaluation = typeof discoveredToolEvaluations.$inferSelect;
 export type InsertDiscoveredToolEvaluation = typeof discoveredToolEvaluations.$inferInsert;
 
+export interface DiscoveredToolWithMetrics extends DiscoveredTool {
+  latestMetric?: ToolPopularityMetric | null;
+  metricsSummary?: {
+    combinedPopularityScore: number;
+    trendingVelocity: number;
+    stabilityScore: number | null;
+    adoptionScore: number | null;
+    innovationScore: number | null;
+    categoryRank: number | null;
+    overallRank: number | null;
+    trendingRank: number | null;
+  } | null;
+  githubMetrics?: Record<string, unknown> | null;
+  packageMetrics?: Record<string, unknown> | null;
+  communityMetrics?: Record<string, unknown> | null;
+}
+
 // Discovery Zod schemas
 export const insertDiscoveredToolSchema = createInsertSchema(discoveredTools);
 export const insertToolDiscoverySessionSchema = createInsertSchema(toolDiscoverySessions);

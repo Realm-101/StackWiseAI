@@ -63,11 +63,12 @@ import {
   type RepositoryAnalysisResponse,
   type GeneratedTasksResponse,
   type TaskGenerationParameters,
+  type TaskDependency,
   type DocSearchRequest,
   type DocSearchResponse,
   type DiscoveryToolSummary,
   type DiscoveredTool,
-  type ToolPopularityMetric,
+  type ProjectResource,
   type DiscoverySearchRequest,
   type DiscoveryTrendingRequest,
   type StartDiscoverySessionRequest,
@@ -126,15 +127,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const randomFrom = <T>(values: T[]): T => values[Math.floor(Math.random() * values.length)];
 
+  const normalizeDecimalString = (value: unknown): string | undefined => {
+    if (value === null || value === undefined || value === '') {
+      return undefined;
+    }
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value.toString();
+    }
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric.toString() : undefined;
+  };
+
+  const toNullableDecimalString = (value: unknown): string | null => normalizeDecimalString(value) ?? null;
+
+  const toOptionalDate = (value: unknown): Date | undefined => {
+    if (!value) {
+      return undefined;
+    }
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? undefined : value;
+    }
+    const date = new Date(value as string | number);
+    return Number.isNaN(date.getTime()) ? undefined : date;
+  };
+
   const mapStoredDiscoveredTool = async (tool: DiscoveredTool): Promise<DiscoveryToolSummary> => {
-    const metrics: ToolPopularityMetric | null = (await storage.getLatestToolPopularityMetric(tool.id).catch(() => null)) ?? null;
-
-    const toNumber = (value: unknown): number | undefined => {
-      if (value === null || value === undefined) return undefined;
-      const numeric = typeof value === 'number' ? value : Number(value);
-      return Number.isFinite(numeric) ? numeric : undefined;
-    };
-
     const source: DiscoveryToolSource = {
       name: tool.name,
       description: tool.description ?? null,
@@ -152,11 +172,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       keywords: tool.keywords ?? [],
       pricingModel: tool.pricingModel ?? undefined,
       costCategory: tool.costCategory ?? undefined,
-      estimatedMonthlyCost: toNumber(tool.estimatedMonthlyCost) ?? null,
+      estimatedMonthlyCost: toNullableDecimalString(tool.estimatedMonthlyCost),
       difficultyLevel: tool.difficultyLevel ?? undefined,
-      popularityScore: toNumber(tool.popularityScore) ?? 0,
-      trendingScore: toNumber(tool.trendingScore) ?? 0,
-      qualityScore: toNumber(tool.qualityScore) ?? 0,
+      popularityScore: normalizeDecimalString(tool.popularityScore) ?? '0',
+      trendingScore: normalizeDecimalString(tool.trendingScore) ?? '0',
+      qualityScore: normalizeDecimalString(tool.qualityScore) ?? '0',
       githubStars: tool.githubStars ?? null,
       githubForks: tool.githubForks ?? null,
       npmWeeklyDownloads: tool.npmWeeklyDownloads ?? null,
@@ -164,14 +184,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
       packageDownloads: tool.packageDownloads ?? null,
       version: tool.version ?? undefined,
       license: tool.license ?? undefined,
-      discoveredAt: tool.discoveredAt ?? undefined,
-      lastUpdated: tool.lastUpdated ?? undefined,
-      lastScanned: tool.lastScanned ?? undefined,
-      metrics: metrics ?? null,
+      discoveredAt: toOptionalDate(tool.discoveredAt),
+      lastUpdated: toOptionalDate(tool.lastUpdated),
+      lastScanned: toOptionalDate(tool.lastScanned),
+      metrics: null,
       evaluation: null,
     };
 
     return mapToDiscoveryToolSummary(source);
+  };
+
+  const loadStoredDiscoverySummaries = async (
+    ids: string[]
+  ): Promise<Map<string, DiscoveryToolSummary>> => {
+    const normalizedIds = Array.from(
+      new Set(
+        ids
+          .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+          .map(id => id.trim())
+      )
+    );
+
+    if (normalizedIds.length === 0) {
+      return new Map();
+    }
+
+    try {
+      const storedTools = await storage.getDiscoveredToolsByIds(normalizedIds);
+      if (!storedTools.length) {
+        return new Map();
+      }
+
+      const mappedSummaries = await Promise.allSettled(
+        storedTools.map(tool => mapStoredDiscoveredTool(tool))
+      );
+
+      const result = new Map<string, DiscoveryToolSummary>();
+      for (const entry of mappedSummaries) {
+        if (entry.status === "fulfilled") {
+          result.set(entry.value.id, entry.value);
+        } else {
+          console.warn("Failed to map stored discovered tool:", entry.reason);
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.warn("Failed to load stored discovery summaries:", error);
+      return new Map();
+    }
+  };
+
+  const hydrateDiscoverySummaries = async (
+    summaries: DiscoveryToolSummary[]
+  ): Promise<DiscoveryToolSummary[]> => {
+    const storedMap = await loadStoredDiscoverySummaries(
+      summaries.map(summary => summary.id)
+    );
+
+    if (storedMap.size === 0) {
+      return summaries;
+    }
+
+    return summaries.map(summary => storedMap.get(summary.id) ?? summary);
   };
 
   const getDiscoveryMonthlyCost = (tool: any): number => {
@@ -2459,7 +2534,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         filters.category ? [filters.category] : undefined
       );
 
-      const items = trendingTools.map(mapToDiscoveryToolSummary);
+      let items = trendingTools.map(mapToDiscoveryToolSummary);
+      items = await hydrateDiscoverySummaries(items);
       const categoryCounts = new Map<string, number>();
       for (const tool of items) {
         categoryCounts.set(tool.category, (categoryCounts.get(tool.category) ?? 0) + 1);
@@ -2530,7 +2606,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const startIndex = filters.offset;
       const endIndex = startIndex + filters.limit;
 
-      const dtoFilteredResults = filteredResults.map(mapToDiscoveryToolSummary);
+      let dtoFilteredResults = filteredResults.map(mapToDiscoveryToolSummary);
+      dtoFilteredResults = await hydrateDiscoverySummaries(dtoFilteredResults);
       const paginatedResults = dtoFilteredResults.slice(startIndex, endIndex);
 
       const categoriesFacet = new Map<string, number>();
@@ -2598,6 +2675,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user.teamSize || undefined,
         user.industry || undefined
       );
+
+      recommendations.items = await hydrateDiscoverySummaries(recommendations.items);
 
       const payload = discoveryRecommendationsResponseSchema.parse(recommendations);
 
@@ -2771,19 +2850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/discovery/categories", async (req, res) => {
     try {
-      // In a real implementation, this would fetch from storage
-      const categories = [
-        { id: "frontend", name: "Frontend", slug: "frontend", description: "User interface frameworks and libraries", toolCount: 45 },
-        { id: "backend", name: "Backend", slug: "backend", description: "Server-side frameworks and APIs", toolCount: 67 },
-        { id: "database", name: "Database", slug: "database", description: "Data storage and management solutions", toolCount: 23 },
-        { id: "devops", name: "DevOps", slug: "devops", description: "Development operations and deployment tools", toolCount: 34 },
-        { id: "testing", name: "Testing", slug: "testing", description: "Testing frameworks and quality assurance tools", toolCount: 28 },
-        { id: "monitoring", name: "Monitoring", slug: "monitoring", description: "Application monitoring and observability", toolCount: 19 },
-        { id: "security", name: "Security", slug: "security", description: "Security tools and authentication", toolCount: 15 },
-        { id: "machine-learning", name: "Machine Learning", slug: "machine-learning", description: "AI and machine learning frameworks", toolCount: 31 },
-        { id: "data-science", name: "Data Science", slug: "data-science", description: "Data analysis and visualization tools", toolCount: 22 },
-      ];
-
+      const categories = await storage.getDiscoveryCategorySummaries();
       res.json(categories);
     } catch (error) {
       console.error("Error fetching discovery categories:", error);
@@ -2916,21 +2983,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user?.teamSize || undefined,
         user?.industry || undefined
       );
-      const recommendationItems = discoveryRecommendations.items;
+      const recommendationItems = await hydrateDiscoverySummaries(discoveryRecommendations.items);
 
       // Integrate trending tools relevant to user's stack
-      const { tools: relevantTrending } = await discoveryEngine.discoverTrendingTools(
+      const { tools: relevantTrendingTools } = await discoveryEngine.discoverTrendingTools(
         { maxToolsPerSource: 5 },
         userCategories.length > 0 ? userCategories : undefined
       );
+
+      let relevantTrending = relevantTrendingTools.map(mapToDiscoveryToolSummary);
+      relevantTrending = await hydrateDiscoverySummaries(relevantTrending);
 
       // Get alternative tools for current stack
       const alternatives = await Promise.all(
         currentStack.slice(0, 3).map(async (toolName) => {
           const category = userTools.find(ut => ut.tool.name === toolName)?.tool.category || 'general';
+          const rawAlternatives = await discoveryEngine.getToolAlternatives(toolName, category, 3);
+          const alternativeSummaries = await hydrateDiscoverySummaries(rawAlternatives);
           return {
             currentTool: toolName,
-            alternatives: (await discoveryEngine.getToolAlternatives(toolName, category, 3)).map(mapToDiscoveryToolSummary)
+            alternatives: alternativeSummaries
           };
         })
       );
@@ -2958,7 +3030,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         },
         combinedScore: {
-          maturity: stackAnalysis.overallScore || 0.7,
+          maturity: Math.min(stackAnalysis.maturityScore / 100, 1),
           innovation: Math.min(0.3 + (relevantTrending.length * 0.1), 1.0),
           costEfficiency: Math.max(0.5, 1.0 - (userTools.length * 0.05)),
         }
@@ -2993,6 +3065,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const category = randomFrom(['frontend', 'backend', 'database', 'devops', 'testing', 'monitoring']);
         const difficulty = randomFrom(['beginner', 'intermediate', 'expert']);
         const estimatedMonthlyCost = pricing === 'free' ? 0 : Math.floor(Math.random() * 90) + 15;
+        const popularityScore = Math.round(Math.random() * 100);
+        const trendingScore = Math.round(Math.random() * 100);
+        const qualityScore = Math.round(Math.random() * 100);
 
         const syntheticSource: DiscoveryToolSource = {
           name: `Tool-${id}`,
@@ -3010,42 +3085,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
           keywords: [],
           pricingModel: pricing,
           costCategory: pricing === 'free' ? 'free' : 'paid',
-          estimatedMonthlyCost,
+          estimatedMonthlyCost: estimatedMonthlyCost.toString(),
           difficultyLevel: difficulty,
-          popularityScore: Math.round(Math.random() * 100),
-          trendingScore: Math.round(Math.random() * 100),
-          qualityScore: Math.round(Math.random() * 100),
+          popularityScore: popularityScore.toString(),
+          trendingScore: trendingScore.toString(),
+          qualityScore: qualityScore.toString(),
           githubStars: null,
           githubForks: null,
           npmWeeklyDownloads: null,
           dockerPulls: null,
           packageDownloads: null,
-          discoveredAt: new Date().toISOString(),
-          lastUpdated: new Date().toISOString(),
-          lastScanned: null,
+          discoveredAt: new Date(),
+          lastUpdated: new Date(),
+          lastScanned: undefined,
           metrics: null,
           evaluation: null,
         };
 
         return mapToDiscoveryToolSummary(syntheticSource);
       };
+      const storedSummaries = await loadStoredDiscoverySummaries(discoveredToolIds);
 
-      const storedDiscoveredTools = await storage.getDiscoveredToolsByIds(discoveredToolIds);
-      const storedDiscoveredMap = new Map(storedDiscoveredTools.map(tool => [tool.id, tool]));
-
-      const discoveredTools = await Promise.all(
-        discoveredToolIds.map(async (id) => {
-          const stored = storedDiscoveredMap.get(id);
-          if (stored) {
-            try {
-              return await mapStoredDiscoveredTool(stored);
-            } catch (error) {
-              console.warn(`Failed to map stored discovered tool ${id}:`, error);
-            }
-          }
-          return createSyntheticSummary(id);
-        })
-      );
+      const discoveredTools = discoveredToolIds.map((id) => {
+        const stored = storedSummaries.get(id);
+        return stored ?? createSyntheticSummary(id);
+      });
 
       const toolFinancials = discoveredTools.map(summary => {
         const monthlyCost = getDiscoveryMonthlyCost(summary);
@@ -3100,23 +3164,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const currentStack = userTools.map(ut => ut.tool.name);
       
       // Get redundancies from traditional analysis
-      const redundancies = await storage.getStackRedundancies(req.user!.id);
+      const redundancyAnalysis = await storage.analyzeStackRedundancies(req.user!.id);
+      const redundancies = redundancyAnalysis?.redundancies ?? [];
       const compatibility = await storage.checkCompatibilityIssues(req.user!.id);
       
       // Get discovery-based optimization suggestions
       const optimizationSuggestions = await Promise.all([
-        // Modern alternatives for existing tools
         discoveryEngine.getStackCompatibleTools(currentStack, 'frontend', 3),
         discoveryEngine.getStackCompatibleTools(currentStack, 'backend', 3),
         discoveryEngine.getStackCompatibleTools(currentStack, 'devops', 3),
       ]);
 
-      const modernAlternatives = optimizationSuggestions
-        .flat()
-        .map(tool => (tool && typeof tool === 'object' && 'provenance' in tool ? tool : mapToDiscoveryToolSummary(tool)))
-        .filter(tool =>
-          !currentStack.includes(tool.name) && getDiscoveryPopularityScore(tool) >= 60
-        );
+      let modernAlternatives = optimizationSuggestions.flat();
+
+      modernAlternatives = await hydrateDiscoverySummaries(modernAlternatives);
+
+      modernAlternatives = modernAlternatives.filter(tool =>
+        !currentStack.includes(tool.name) && getDiscoveryPopularityScore(tool) >= 60
+      );
 
       // Cost optimization opportunities
       const costOptimizations = userTools.map(ut => {
@@ -3213,8 +3278,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       const allRecommendations = recommendationResult.items;
 
+      type BudgetTool = DiscoveryToolSummary & { pricingModel: string; estimatedCost: number };
+
       // Categorize tools by estimated cost
-      const budgetPlan = {
+      const budgetPlan: {
+        immediate: BudgetTool[];
+        shortTerm: BudgetTool[];
+        longTerm: BudgetTool[];
+        futureConsideration: BudgetTool[];
+      } = {
         immediate: [], // Free tools that can be added now
         shortTerm: [], // Low-cost tools for next 3 months
         longTerm: [], // Higher-cost tools for 3-6 months
@@ -3224,7 +3296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       allRecommendations.forEach(tool => {
         const pricingModel = getDiscoveryPricingModel(tool);
         const estimatedCost = getDiscoveryMonthlyCost(tool);
-        const toolWithCost = { ...tool, pricingModel, estimatedCost };
+        const toolWithCost: BudgetTool = { ...tool, pricingModel, estimatedCost };
 
         if (estimatedCost === 0) {
           budgetPlan.immediate.push(toolWithCost);
@@ -3481,7 +3553,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getProjectMilestones(id)
       ]);
 
-      const dependencies = []; // Would get from storage
+      const dependencies: TaskDependency[] = []; // TODO: fetch dependencies from storage when available
       const timelineResult = await timelineEngine.calculateProjectTimeline(
         id, tasks, dependencies, phases, milestones
       );
@@ -3578,25 +3650,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userProjects = await storage.getUserProjects(req.user.id);
       const userTasks = await storage.getUserTasks(req.user.id);
 
-      // Extract resources for optimization
-      const resources = userResources.map(ur => ({
-        id: ur.id,
-        resourceId: ur.resourceId,
-        resourceName: ur.resourceName,
-        resourceType: ur.resourceType,
-        projectId: ur.project.id,
-        allocationPercentage: ur.allocationPercentage,
-        totalHoursAllocated: ur.totalHoursAllocated,
-        hoursUsed: ur.hoursUsed,
-        availableFrom: ur.availableFrom,
-        availableUntil: ur.availableUntil,
-        hourlyRate: ur.hourlyRate,
-        requiredSkills: ur.requiredSkills,
-        isActive: ur.isActive
-      }));
+      // Extract base project resource records (drop eager-loaded project relation)
+      const resources: ProjectResource[] = userResources.map(({ project: _project, ...resource }) => resource);
 
       const optimization = await resourceOptimizer.optimizeResourceAllocation(
-        resources, userTasks, userProjects
+        resources,
+        userTasks,
+        userProjects
       );
 
       res.json(optimization);
@@ -3615,20 +3675,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { startDate, endDate } = req.query;
       const userResources = await storage.getUserResourceAllocations(req.user.id);
       
-      // Extract unique resources
-      const resources = userResources.map(ur => ({
-        id: ur.id,
-        resourceId: ur.resourceId,
-        resourceName: ur.resourceName,
-        resourceType: ur.resourceType,
-        allocationPercentage: ur.allocationPercentage,
-        totalHoursAllocated: ur.totalHoursAllocated,
-        hoursUsed: ur.hoursUsed,
-        availableFrom: ur.availableFrom,
-        availableUntil: ur.availableUntil,
-        hourlyRate: ur.hourlyRate,
-        isActive: ur.isActive
-      }));
+      // Extract the underlying project resource entities for utilization analysis
+      const resources: ProjectResource[] = userResources.map(({ project: _project, ...resource }) => resource);
 
       const dateRange = {
         start: startDate ? new Date(startDate as string) : new Date(),

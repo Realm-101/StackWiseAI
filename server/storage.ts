@@ -35,6 +35,10 @@ import {
   discoveryCategories,
   userDiscoveryPreferences,
   discoveredToolEvaluations,
+  // Repository analysis tables
+  repositoryAnalyses,
+  repositoryImports,
+  detectedTools,
   type User, 
   type InsertUser, 
   type Tool, 
@@ -108,6 +112,8 @@ import {
   // Discovery types
   type DiscoveredTool,
   type InsertDiscoveredTool,
+  type DetectedTool,
+  type InsertDetectedTool,
   type ToolDiscoverySession,
   type InsertToolDiscoverySession,
   type ExternalToolData,
@@ -118,6 +124,10 @@ import {
   type InsertDiscoveryCategory,
   type UserDiscoveryPreference,
   type InsertUserDiscoveryPreference,
+  type RepositoryAnalysis,
+  type InsertRepositoryAnalysis,
+  type RepositoryImport,
+  type InsertRepositoryImport,
   type DiscoveredToolEvaluation,
   type InsertDiscoveredToolEvaluation,
   type DiscoveredToolWithMetrics,
@@ -249,7 +259,10 @@ export interface IStorage {
   createRepositoryAnalysis(analysis: InsertRepositoryAnalysis): Promise<RepositoryAnalysis>;
   getRepositoryAnalysis(id: string): Promise<RepositoryAnalysis | undefined>;
   getUserRepositoryAnalyses(userId: string): Promise<RepositoryAnalysis[]>;
-  updateRepositoryAnalysis(id: string, updates: Partial<InsertRepositoryAnalysis>): Promise<RepositoryAnalysis | undefined>;
+  updateRepositoryAnalysis(
+    id: string,
+    updates: Partial<InsertRepositoryAnalysis> & { completedAt?: Date }
+  ): Promise<RepositoryAnalysis | undefined>;
   deleteRepositoryAnalysis(id: string): Promise<void>;
   verifyRepositoryAnalysisOwnership(analysisId: string, userId: string): Promise<boolean>;
 
@@ -744,7 +757,7 @@ export interface IStorage {
   sessionStore: session.Store;
 }
 
-export class DatabaseStorage implements IStorage {
+export class DatabaseStorage implements Partial<IStorage> {
   sessionStore: session.Store;
 
   constructor() {
@@ -896,6 +909,126 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Discovery tool operations
+
+async getAllDiscoveryCategories(): Promise<DiscoveryCategory[]> {
+  return await db.select().from(discoveryCategories);
+}
+
+async getDiscoveryCategorySummaries(): Promise<Array<{ id: string; name: string; slug: string; description: string | null; toolCount: number }>> {
+  const normalize = (value: string | null | undefined): string =>
+    value ? value.trim().toLowerCase() : '';
+
+  const toSlug = (value: string): string =>
+    value
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+  const toTitle = (value: string): string =>
+    value
+      .split(/[-_ ]+/)
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+
+  const categories = await this.getAllDiscoveryCategories().catch(() => []);
+
+  const countResults = await db
+    .select({
+      category: discoveredTools.category,
+      toolCount: count().as('tool_count'),
+    })
+    .from(discoveredTools)
+    .groupBy(discoveredTools.category);
+
+  const countMap = new Map<string, number>();
+  for (const { category, toolCount } of countResults) {
+    const key = normalize(category);
+    if (!key) continue;
+    countMap.set(key, Number(toolCount ?? 0));
+  }
+
+  const updates: Array<{ id: string; toolCount: number }> = [];
+
+  for (const category of categories) {
+    const key = normalize(category.slug ?? category.name ?? category.id);
+    if (!key) continue;
+    const currentCount = countMap.get(key) ?? 0;
+    if (category.id && (category.toolCount ?? 0) !== currentCount) {
+      updates.push({ id: category.id, toolCount: currentCount });
+    }
+    countMap.delete(key);
+  }
+
+  if (updates.length > 0) {
+    await Promise.all(
+      updates.map(({ id, toolCount }) =>
+        db
+          .update(discoveryCategories)
+          .set({ toolCount })
+          .where(eq(discoveryCategories.id, id))
+      )
+    );
+  }
+
+  if (countMap.size > 0) {
+    const values = Array.from(countMap.entries()).map(([key, toolCount]) => ({
+      name: toTitle(key),
+      slug: toSlug(key),
+      description: null,
+      toolCount,
+      level: 0,
+      isVisible: true,
+    }));
+
+    await db
+      .insert(discoveryCategories)
+      .values(values)
+      .onConflictDoNothing({ target: discoveryCategories.slug });
+  }
+
+  const finalCategories = await this.getAllDiscoveryCategories().catch(() => categories);
+
+  const finalCountMap = new Map<string, number>();
+  for (const { category, toolCount } of countResults) {
+    const key = normalize(category);
+    if (!key) continue;
+    finalCountMap.set(key, Number(toolCount ?? 0));
+  }
+
+  const summaries: Array<{ id: string; name: string; slug: string; description: string | null; toolCount: number }> = [];
+
+  for (const category of finalCategories) {
+    const key = normalize(category.slug ?? category.name ?? category.id);
+    if (!key) continue;
+    const slug = category.slug ?? toSlug(category.name ?? key);
+    const name = category.name ?? toTitle(key);
+    const toolCount = finalCountMap.get(key) ?? 0;
+    summaries.push({
+      id: category.id ?? slug,
+      name,
+      slug,
+      description: category.description ?? null,
+      toolCount,
+    });
+    finalCountMap.delete(key);
+  }
+
+  finalCountMap.forEach((toolCount, key) => {
+    const slug = toSlug(key);
+    const name = toTitle(key);
+    summaries.push({
+      id: slug,
+      name,
+      slug,
+      description: null,
+      toolCount,
+    });
+  });
+
+  return summaries.sort((a, b) => a.name.localeCompare(b.name));
+}
   async getDiscoveredToolsByIds(ids: string[]): Promise<DiscoveredTool[]> {
     if (!ids.length) {
       return [];
@@ -1058,9 +1191,10 @@ export class DatabaseStorage implements IStorage {
   async findMissingStackPieces(userId: string): Promise<{
     missing: Array<{
       category: string;
-      importance: 'critical' | 'important' | 'recommended';
+      importance: RecommendationImportance;
       reason: string;
       suggestedTools: Tool[];
+      benefits: string;
     }>;
     essentialCategories: string[];
     stackCompleteness: number;
@@ -1078,7 +1212,13 @@ export class DatabaseStorage implements IStorage {
     ];
 
     const userCategories = new Set(userTools.map(ut => ut.tool.category));
-    const missing: any[] = [];
+    const missing: Array<{
+      category: string;
+      importance: RecommendationImportance;
+      reason: string;
+      suggestedTools: Tool[];
+      benefits: string;
+    }> = [];
 
     for (const category of essentialCategories) {
       if (!userCategories.has(category)) {
@@ -1237,14 +1377,17 @@ export class DatabaseStorage implements IStorage {
   async generateStackRecommendations(userId: string): Promise<{
     recommendations: Array<{
       type: 'add_tool' | 'remove_tool' | 'replace_tool' | 'optimize_cost';
-      priority: 'high' | 'medium' | 'low';
+      priority: OptimizationSeverity;
       category: string;
+      title: string;
       description: string;
       suggestedTools?: Tool[];
       potentialSavings?: number;
       reasoning: string;
+      benefits?: string;
     }>;
     stackHealthScore: number;
+    optimizationScore: number;
   }> {
     const [redundancies, missing, compatibility] = await Promise.all([
       this.analyzeStackRedundancies(userId),
@@ -1252,7 +1395,19 @@ export class DatabaseStorage implements IStorage {
       this.checkCompatibilityIssues(userId)
     ]);
 
-    const recommendations: any[] = [];
+    type StackRecommendation = {
+      type: 'add_tool' | 'remove_tool' | 'replace_tool' | 'optimize_cost';
+      priority: OptimizationSeverity;
+      category: string;
+      title: string;
+      description: string;
+      suggestedTools?: Tool[];
+      potentialSavings?: number;
+      reasoning: string;
+      benefits?: string;
+    };
+
+    const recommendations: StackRecommendation[] = [];
     
     // Add recommendations from redundancy analysis with value-focused approach
     redundancies.redundancies.forEach(redundancy => {
@@ -1406,7 +1561,7 @@ export class DatabaseStorage implements IStorage {
   // AI enhancement operations
   async getBudgetConstrainedRecommendations(userId: string, maxBudget?: number): Promise<Tool[]> {
     const userTools = await this.getUserTools(userId);
-    const currentCost = userTools.reduce((sum, ut) => sum + parseFloat(ut.monthlyCost), 0);
+    const currentCost = userTools.reduce((sum, ut) => sum + parseFloat(ut.monthlyCost ?? '0'), 0);
     
     const user = await this.getUser(userId);
     const budget = maxBudget || (user?.monthlyBudget ? parseFloat(user.monthlyBudget) : 1000);
@@ -1609,8 +1764,8 @@ export class DatabaseStorage implements IStorage {
     if (profile.technicalLevel) updateData.technicalLevel = profile.technicalLevel;
     if (profile.primaryGoals) updateData.primaryGoals = profile.primaryGoals;
     if (profile.companyStage) updateData.companyStage = profile.companyStage;
-    if (profile.monthlyBudget) {
-      updateData.monthlyBudget = typeof profile.monthlyBudget === 'string' ? profile.monthlyBudget : profile.monthlyBudget.toString();
+    if (typeof profile.monthlyBudget === 'string' && profile.monthlyBudget.trim().length > 0) {
+      updateData.monthlyBudget = profile.monthlyBudget;
     }
 
     // Store additional context
@@ -1761,7 +1916,10 @@ export class DatabaseStorage implements IStorage {
       .orderBy(sql`${repositoryAnalyses.createdAt} DESC`);
   }
 
-  async updateRepositoryAnalysis(id: string, updates: Partial<InsertRepositoryAnalysis>): Promise<RepositoryAnalysis | undefined> {
+  async updateRepositoryAnalysis(
+    id: string,
+    updates: Partial<InsertRepositoryAnalysis> & { completedAt?: Date }
+  ): Promise<RepositoryAnalysis | undefined> {
     const [updated] = await db
       .update(repositoryAnalyses)
       .set(updates)
@@ -1873,7 +2031,7 @@ export class DatabaseStorage implements IStorage {
 
   async updateTaskGeneration(id: string, updates: Partial<InsertTaskGeneration>): Promise<TaskGeneration | undefined> {
     const [updated] = await db.update(taskGenerations)
-      .set({ ...updates, updatedAt: new Date() })
+      .set(updates)
       .where(eq(taskGenerations.id, id))
       .returning();
     return updated;
@@ -2184,57 +2342,61 @@ export class DatabaseStorage implements IStorage {
     limit?: number;
     offset?: number;
   } = {}): Promise<DocumentationArticle[]> {
-    let query = db.select().from(documentationArticles);
-    
-    const conditions = [];
-    
+    const baseQuery = db.select().from(documentationArticles);
+
+    const conditions: SQL<unknown>[] = [];
+
     if (filters.categoryId) {
       conditions.push(eq(documentationArticles.categoryId, filters.categoryId));
     }
-    
+
     if (filters.contentType) {
       conditions.push(eq(documentationArticles.contentType, filters.contentType));
     }
-    
+
     if (filters.difficulty) {
       conditions.push(eq(documentationArticles.difficulty, filters.difficulty));
     }
-    
+
     if (filters.isPublished !== undefined) {
       conditions.push(eq(documentationArticles.isPublished, filters.isPublished));
     } else {
       conditions.push(eq(documentationArticles.isPublished, true));
     }
 
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions));
-    }
+    const filteredQuery = conditions.length > 0
+      ? baseQuery.where(and(...(conditions as [SQL<unknown>, ...SQL<unknown>[]])) as SQL<unknown>)
+      : baseQuery;
 
-    query = query.orderBy(desc(documentationArticles.isFeatured), desc(documentationArticles.viewCount), desc(documentationArticles.updatedAt));
+    const orderedQuery = filteredQuery.orderBy(
+      desc(documentationArticles.isFeatured),
+      desc(documentationArticles.viewCount),
+      desc(documentationArticles.updatedAt)
+    );
 
-    if (filters.limit) {
-      query = query.limit(filters.limit);
-    }
+    const limitedQuery = typeof filters.limit === 'number'
+      ? orderedQuery.limit(filters.limit)
+      : orderedQuery;
 
-    if (filters.offset) {
-      query = query.offset(filters.offset);
-    }
+    const pagedQuery = typeof filters.offset === 'number'
+      ? limitedQuery.offset(filters.offset)
+      : limitedQuery;
 
-    return await query;
+    return await pagedQuery;
   }
 
   async searchDocumentation(request: DocSearchRequest, userId?: string): Promise<DocSearchResponse> {
     const startTime = Date.now();
-    
-    let query = db.select({
+
+    const baseQuery = db.select({
       article: documentationArticles,
       category: docCategories
     })
     .from(documentationArticles)
     .innerJoin(docCategories, eq(documentationArticles.categoryId, docCategories.id));
 
-    const conditions = [eq(documentationArticles.isPublished, true)];
-    
+    const conditions: SQL<unknown>[] = [eq(documentationArticles.isPublished, true)];
+
     // Full-text search on title and content
     if (request.q) {
       conditions.push(
@@ -2242,7 +2404,7 @@ export class DatabaseStorage implements IStorage {
           ilike(documentationArticles.title, `%${request.q}%`),
           ilike(documentationArticles.content, `%${request.q}%`),
           ilike(documentationArticles.excerpt, `%${request.q}%`)
-        )
+        ) as SQL<unknown>
       );
     }
 
@@ -2271,28 +2433,27 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
-    query = query.where(and(...conditions));
+    const whereClause = and(...(conditions as [SQL<unknown>, ...SQL<unknown>[]])) as SQL<unknown>;
 
-    // Order by relevance (simplified - could be more sophisticated)
-    query = query.orderBy(
-      desc(documentationArticles.isFeatured),
-      desc(documentationArticles.viewCount),
-      desc(documentationArticles.updatedAt)
-    );
+    const orderedQuery = baseQuery
+      .where(whereClause)
+      .orderBy(
+        desc(documentationArticles.isFeatured),
+        desc(documentationArticles.viewCount),
+        desc(documentationArticles.updatedAt)
+      );
 
-    const limit = request.limit ? parseInt(request.limit) : 20;
-    const offset = request.offset ? parseInt(request.offset) : 0;
-    
-    // Get total count
+    const limit = request.limit ? parseInt(request.limit, 10) : 20;
+    const offset = request.offset ? parseInt(request.offset, 10) : 0;
+
+    const results = await orderedQuery.limit(limit).offset(offset);
+
     const totalCountResult = await db.select({ count: count() })
       .from(documentationArticles)
       .innerJoin(docCategories, eq(documentationArticles.categoryId, docCategories.id))
-      .where(and(...conditions));
-    
-    const totalCount = totalCountResult[0]?.count || 0;
+      .where(whereClause);
 
-    // Get results
-    const results = await query.limit(limit).offset(offset);
+    const totalCount = totalCountResult[0]?.count || 0;
 
     // Get tags for articles
     const articleIds = results.map(r => r.article.id);
@@ -2421,17 +2582,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateDocumentationArticle(id: string, updates: Partial<InsertDocumentationArticle>): Promise<DocumentationArticle | undefined> {
-    // Update search vector if content changed
+    const updatePayload: Partial<typeof documentationArticles.$inferInsert> = { ...updates };
+
     if (updates.title || updates.excerpt || updates.content) {
-      const article = await db.select().from(documentationArticles).where(eq(documentationArticles.id, id));
-      if (article[0]) {
-        const searchVector = `${updates.title || article[0].title} ${updates.excerpt || article[0].excerpt || ''} ${updates.content || article[0].content}`;
-        updates.searchVector = searchVector;
+      const existing = await db.select().from(documentationArticles).where(eq(documentationArticles.id, id));
+      if (existing[0]) {
+        const searchVector = `${updates.title || existing[0].title} ${updates.excerpt || existing[0].excerpt || ''} ${updates.content || existing[0].content}`;
+        updatePayload.searchVector = searchVector;
       }
     }
 
     const [updated] = await db.update(documentationArticles)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...updatePayload, updatedAt: new Date() })
       .where(eq(documentationArticles.id, id))
       .returning();
     return updated;
@@ -3183,22 +3345,28 @@ export class DatabaseStorage implements IStorage {
     createdBy?: string;
     limit?: number;
   } = {}): Promise<ProjectTemplate[]> {
-    let query = db.select().from(projectTemplates);
+    const baseQuery = db.select().from(projectTemplates);
 
-    const conditions: any[] = [];
+    const conditions: SQL<unknown>[] = [];
     if (filters.category) conditions.push(eq(projectTemplates.category, filters.category));
     if (filters.templateType) conditions.push(eq(projectTemplates.templateType, filters.templateType));
     if (filters.isPublic !== undefined) conditions.push(eq(projectTemplates.isPublic, filters.isPublic));
     if (filters.createdBy) conditions.push(eq(projectTemplates.createdBy, filters.createdBy));
 
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions));
-    }
+    const filteredQuery = conditions.length > 0
+      ? baseQuery.where(and(...conditions))
+      : baseQuery;
 
-    query = query.orderBy(desc(projectTemplates.usageCount), desc(projectTemplates.averageRating));
-    
-    const results = await query;
-    return filters.limit ? results.slice(0, filters.limit) : results;
+    const orderedQuery = filteredQuery.orderBy(
+      desc(projectTemplates.usageCount),
+      desc(projectTemplates.averageRating)
+    );
+
+    const limitedQuery = typeof filters.limit === 'number'
+      ? orderedQuery.limit(filters.limit)
+      : orderedQuery;
+
+    return await limitedQuery;
   }
 
   async getProjectTemplate(id: string): Promise<ProjectTemplate | undefined> {
@@ -3256,19 +3424,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getProjectAnalytics(projectId: string, dateRange?: { start: Date; end: Date }): Promise<ProjectAnalytics[]> {
-    let query = db.select().from(projectAnalytics)
-      .where(eq(projectAnalytics.projectId, projectId));
+    const conditions: SQL<unknown>[] = [eq(projectAnalytics.projectId, projectId)];
 
     if (dateRange) {
-      query = query.where(
-        and(
-          sql`${projectAnalytics.recordDate} >= ${dateRange.start}`,
-          sql`${projectAnalytics.recordDate} <= ${dateRange.end}`
-        )
+      conditions.push(
+        sql`${projectAnalytics.recordDate} >= ${dateRange.start}`,
+        sql`${projectAnalytics.recordDate} <= ${dateRange.end}`
       );
     }
 
-    return query.orderBy(desc(projectAnalytics.recordDate));
+    const whereClause = and(...(conditions as [SQL<unknown>, ...SQL<unknown>[]])) as SQL<unknown>;
+
+    return db.select()
+      .from(projectAnalytics)
+      .where(whereClause)
+      .orderBy(desc(projectAnalytics.recordDate));
   }
 
   async getPortfolioAnalytics(userId: string): Promise<{
@@ -3527,5 +3697,6 @@ export class DatabaseStorage implements IStorage {
 }
 
 export const storage = new DatabaseStorage();
+
 
 
